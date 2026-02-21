@@ -1,7 +1,12 @@
 {
   "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
     }
-  }
+  },
+  "include": ["**/*.js", "**/*.jsx"],
+  "exclude": ["node_modules"]
 }
