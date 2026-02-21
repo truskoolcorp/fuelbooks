@@ -1,3 +1,4 @@
+import Link from 'next/link';
 export const metadata = {
   title: "FuelBooks Pro — Fuel Brokerage Accounting",
   description: "Full-featured accounting platform for fuel brokerages with invoicing, P&L, and tax engine",
