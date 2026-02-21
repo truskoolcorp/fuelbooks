@@ -1,5 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import PayrollModule from "./PayrollModule";
+import EmailIngestModule from "./EmailIngestModule";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUELBOOKS PRO — Fuel Brokerage Accounting Platform
@@ -129,6 +131,8 @@ const IC = {
   void: ["M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z", "M4.93 4.93l14.14 14.14"],
   dup: ["M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2", "M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z"],
   alert: ["M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z", "M12 9v4", "M12 17h.01"],
+  payroll: ["M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2", "M9 11a4 4 0 100-8 4 4 0 000 8z", "M12 1v22", "M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"],
+  ingest: ["M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z", "M22 6l-10 7L2 6"],
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -139,7 +143,7 @@ export default function FuelBooksApp() {
   const [loads, setLoads] = useState(initLoads);
   const [invoices, setInvoices] = useState([]);
   const [payments, setPayments] = useState([]);
-  const [expenses] = useState(initExpenses);
+  const [expenses, setExpenses] = useState(initExpenses);
   const [customers] = useState(initCustomers);
   const [suppliers] = useState(initSuppliers);
   const [modal, setModal] = useState(null);
@@ -264,6 +268,8 @@ export default function FuelBooksApp() {
     { id: "customers", label: "Customers", icon: IC.cust },
     { id: "suppliers", label: "Suppliers", icon: IC.sup },
     { id: "expenses", label: "Expenses", icon: IC.exp },
+    { id: "payroll", label: "Payroll", icon: IC.payroll },
+    { id: "ingest", label: "Email Ingest", icon: IC.ingest },
     { id: "reports", label: "Reports", icon: IC.rpt },
   ];
 
@@ -329,6 +335,8 @@ export default function FuelBooksApp() {
           {tab === "customers" && <CustomersTab customers={customers} invoices={invoices} />}
           {tab === "suppliers" && <SuppliersTab suppliers={suppliers} loads={loads} />}
           {tab === "expenses" && <ExpensesTab expenses={expenses} />}
+          {tab === "payroll" && <PayrollModule onExpenseCreate={newExps => setExpenses(prev => [...prev, ...newExps])} onToast={showToast} />}
+          {tab === "ingest" && <EmailIngestModule customers={customers} suppliers={suppliers} invoices={invoices} onCreateInvoice={inv => { setInvoices(prev => [...prev, inv]); }} onCreateBill={null} onCreateExpense={newExps => setExpenses(prev => [...prev, ...newExps])} onToast={showToast} />}
           {tab === "reports" && <ReportsTab pnl={pnl} taxSummary={taxSummary} invoices={invoices} loads={loads} customers={customers} />}
         </div>
       </main>
