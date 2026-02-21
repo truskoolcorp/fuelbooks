@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FuelBooks Pro — Fuel Brokerage Accounting</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+  body { background: #06090F; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #1E2538; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2A3348; }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type="number"] { -moz-appearance: textfield; }
+  select { cursor: pointer; }
+  @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAX ENGINE
+// ═══════════════════════════════════════════════════════════════════════════════
+const FEDERAL_FUEL_TAX = {
+  "ULSD": 0.244, "Regular 87": 0.184, "Midgrade 89": 0.184, "Premium 93": 0.184,
+  "E85": 0.184, "Biodiesel B20": 0.244, "Biodiesel B100": 0.244, "Jet-A": 0.219,
+  "Kerosene": 0.244, "Heating Oil": 0.244, "Propane": 0.183, "CNG": 0.184,
+};
+
+const STATE_FUEL_TAX = {
+  TX: { "ULSD": 0.20, "Regular 87": 0.20, "Midgrade 89": 0.20, "Premium 93": 0.20, "E85": 0.20, "Biodiesel B20": 0.20, "Biodiesel B100": 0.20, "Jet-A": 0.00, "Kerosene": 0.20, "Heating Oil": 0.20, salesTaxRate: 0.0625, name: "Texas" },
+  LA: { "ULSD": 0.20, "Regular 87": 0.20, "Midgrade 89": 0.20, "Premium 93": 0.20, "E85": 0.20, "Biodiesel B20": 0.20, "Biodiesel B100": 0.20, "Jet-A": 0.00, "Kerosene": 0.20, "Heating Oil": 0.20, salesTaxRate: 0.0445, name: "Louisiana" },
+  OK: { "ULSD": 0.19, "Regular 87": 0.19, "Midgrade 89": 0.19, "Premium 93": 0.19, "E85": 0.19, "Biodiesel B20": 0.19, "Biodiesel B100": 0.19, "Jet-A": 0.001, "Kerosene": 0.19, "Heating Oil": 0.19, salesTaxRate: 0.045, name: "Oklahoma" },
+  NM: { "ULSD": 0.21, "Regular 87": 0.17, "Midgrade 89": 0.17, "Premium 93": 0.17, "E85": 0.17, "Biodiesel B20": 0.21, "Biodiesel B100": 0.21, "Jet-A": 0.00, "Kerosene": 0.21, "Heating Oil": 0.21, salesTaxRate: 0.05125, name: "New Mexico" },
+  AR: { "ULSD": 0.285, "Regular 87": 0.245, "Midgrade 89": 0.245, "Premium 93": 0.245, "E85": 0.245, "Biodiesel B20": 0.285, "Biodiesel B100": 0.285, "Jet-A": 0.00, "Kerosene": 0.285, "Heating Oil": 0.285, salesTaxRate: 0.065, name: "Arkansas" },
+  MS: { "ULSD": 0.18, "Regular 87": 0.18, "Midgrade 89": 0.18, "Premium 93": 0.18, "E85": 0.18, "Biodiesel B20": 0.18, "Biodiesel B100": 0.18, "Jet-A": 0.00, "Kerosene": 0.18, "Heating Oil": 0.18, salesTaxRate: 0.07, name: "Mississippi" },
+  CA: { "ULSD": 0.389, "Regular 87": 0.579, "Midgrade 89": 0.579, "Premium 93": 0.579, "E85": 0.579, "Biodiesel B20": 0.389, "Biodiesel B100": 0.389, "Jet-A": 0.02, "Kerosene": 0.389, "Heating Oil": 0.389, salesTaxRate: 0.0725, name: "California" },
+  FL: { "ULSD": 0.277, "Regular 87": 0.277, "Midgrade 89": 0.277, "Premium 93": 0.277, "E85": 0.277, "Biodiesel B20": 0.277, "Biodiesel B100": 0.277, "Jet-A": 0.043, "Kerosene": 0.277, "Heating Oil": 0.277, salesTaxRate: 0.06, name: "Florida" },
+  GA: { "ULSD": 0.327, "Regular 87": 0.312, "Midgrade 89": 0.312, "Premium 93": 0.312, "E85": 0.312, "Biodiesel B20": 0.327, "Biodiesel B100": 0.327, "Jet-A": 0.01, "Kerosene": 0.327, "Heating Oil": 0.327, salesTaxRate: 0.04, name: "Georgia" },
+  AZ: { "ULSD": 0.26, "Regular 87": 0.18, "Midgrade 89": 0.18, "Premium 93": 0.18, "E85": 0.18, "Biodiesel B20": 0.26, "Biodiesel B100": 0.26, "Jet-A": 0.001, "Kerosene": 0.26, "Heating Oil": 0.26, salesTaxRate: 0.056, name: "Arizona" },
+};
+const ALL_STATES = Object.entries(STATE_FUEL_TAX).map(([k, v]) => ({ code: k, name: v.name }));
+const FUEL_TYPES = Object.keys(FEDERAL_FUEL_TAX);
+
+function calcTaxes(fuelType, gallons, state, deliveryType) {
+  const fedRate = FEDERAL_FUEL_TAX[fuelType] || 0;
+  const stateData = STATE_FUEL_TAX[state] || {};
+  const stateRate = stateData[fuelType] || 0;
+  const fedTax = fedRate * gallons;
+  const stateTax = stateRate * gallons;
+  const isExempt = deliveryType === "export" || deliveryType === "government" || (fuelType === "Jet-A" && deliveryType === "airline");
+  return { federalRate: fedRate, stateRate, fedTax: isExempt ? 0 : fedTax, stateTax: isExempt ? 0 : stateTax, totalTax: isExempt ? 0 : fedTax + stateTax, combinedRate: isExempt ? 0 : fedRate + stateRate, exempt: isExempt, exemptReason: isExempt ? deliveryType + " exempt" : null };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILS
+// ═══════════════════════════════════════════════════════════════════════════════
+const fmt = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+const fmt4 = (n) => "$" + n.toFixed(4);
+const fmtN = (n) => new Intl.NumberFormat("en-US").format(n);
+const pct = (n) => (n * 100).toFixed(1) + "%";
+const genId = (p) => p + "-" + Date.now().toString(36).toUpperCase();
+const today = () => "2026-02-21";
+const addDays = (d, n) => { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().split("T")[0]; };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INITIAL DATA
+// ═══════════════════════════════════════════════════════════════════════════════
+const initCustomers = [
+  { id: "C-1001", name: "Lone Star Petroleum", contact: "Mike Reeves", email: "mike@lonestarpetro.com", phone: "(214) 555-0142", state: "TX", terms: 10, creditLimit: 100000, taxExempt: false, deliveryType: "commercial" },
+  { id: "C-1002", name: "Gulf Coast Distributors", contact: "Sandra Chen", email: "schen@gulfcoastdist.com", phone: "(713) 555-0198", state: "TX", terms: 10, creditLimit: 75000, taxExempt: false, deliveryType: "commercial" },
+  { id: "C-1003", name: "Heartland Fuel Co.", contact: "Tom Bradley", email: "tbradley@heartlandfuel.com", phone: "(405) 555-0167", state: "OK", terms: 14, creditLimit: 50000, taxExempt: false, deliveryType: "commercial" },
+  { id: "C-1004", name: "Rio Grande Energy", contact: "Maria Gutierrez", email: "mgutierrez@riograndeenergy.com", phone: "(956) 555-0134", state: "TX", terms: 7, creditLimit: 150000, taxExempt: false, deliveryType: "commercial" },
+  { id: "C-1005", name: "Bayou Fuel Services", contact: "Andre Dupont", email: "adupont@bayoufuel.com", phone: "(504) 555-0189", state: "LA", terms: 10, creditLimit: 60000, taxExempt: false, deliveryType: "commercial" },
+  { id: "C-1006", name: "Desert Sun Aviation", contact: "Rachel Mora", email: "rmora@desertsun.aero", phone: "(602) 555-0112", state: "AZ", terms: 7, creditLimit: 200000, taxExempt: true, deliveryType: "airline" },
+];
+const initSuppliers = [
+  { id: "S-2001", name: "Valero Energy Corp", contact: "Dispatch", email: "dispatch@valero.com", terms: 10 },
+  { id: "S-2002", name: "Marathon Petroleum", contact: "Supply Desk", email: "supply@marathon.com", terms: 7 },
+  { id: "S-2003", name: "Phillips 66", contact: "Trading Desk", email: "trading@p66.com", terms: 10 },
+  { id: "S-2004", name: "Motiva Enterprises", contact: "Bulk Sales", email: "bulk@motiva.com", terms: 14 },
+];
+const initLoads = [
+  { id: "LD-5001", date: "2026-02-20", customerId: "C-1001", supplierId: "S-2001", fuelType: "ULSD", gallons: 8500, buyPrice: 2.34, sellPrice: 2.52, status: "delivered", carrier: "Swift Transport", bolNumber: "BOL-88901", deliveryState: "TX", deliveryType: "commercial" },
+  { id: "LD-5002", date: "2026-02-20", customerId: "C-1002", supplierId: "S-2002", fuelType: "Regular 87", gallons: 8200, buyPrice: 2.18, sellPrice: 2.38, status: "in-transit", carrier: "Heartland Carriers", bolNumber: "BOL-88902", deliveryState: "TX", deliveryType: "commercial" },
+  { id: "LD-5003", date: "2026-02-19", customerId: "C-1004", supplierId: "S-2003", fuelType: "Premium 93", gallons: 7800, buyPrice: 2.67, sellPrice: 2.89, status: "delivered", carrier: "Eagle Logistics", bolNumber: "BOL-88903", deliveryState: "TX", deliveryType: "commercial" },
+  { id: "LD-5004", date: "2026-02-19", customerId: "C-1003", supplierId: "S-2001", fuelType: "ULSD", gallons: 8400, buyPrice: 2.33, sellPrice: 2.51, status: "delivered", carrier: "Swift Transport", bolNumber: "BOL-88904", deliveryState: "OK", deliveryType: "commercial" },
+  { id: "LD-5005", date: "2026-02-18", customerId: "C-1005", supplierId: "S-2004", fuelType: "E85", gallons: 7600, buyPrice: 1.89, sellPrice: 2.12, status: "delivered", carrier: "Central Haulers", bolNumber: "BOL-88905", deliveryState: "LA", deliveryType: "commercial" },
+  { id: "LD-5006", date: "2026-02-18", customerId: "C-1001", supplierId: "S-2002", fuelType: "Regular 87", gallons: 8300, buyPrice: 2.19, sellPrice: 2.39, status: "delivered", carrier: "Heartland Carriers", bolNumber: "BOL-88906", deliveryState: "TX", deliveryType: "commercial" },
+  { id: "LD-5007", date: "2026-02-17", customerId: "C-1002", supplierId: "S-2003", fuelType: "ULSD", gallons: 8100, buyPrice: 2.35, sellPrice: 2.54, status: "delivered", carrier: "Eagle Logistics", bolNumber: "BOL-88907", deliveryState: "TX", deliveryType: "commercial" },
+  { id: "LD-5008", date: "2026-02-06", customerId: "C-1006", supplierId: "S-2001", fuelType: "Jet-A", gallons: 15000, buyPrice: 2.78, sellPrice: 3.01, status: "delivered", carrier: "AeroHaul", bolNumber: "BOL-88890", deliveryState: "AZ", deliveryType: "airline" },
+  { id: "LD-5009", date: "2026-02-10", customerId: "C-1004", supplierId: "S-2004", fuelType: "ULSD", gallons: 8200, buyPrice: 2.31, sellPrice: 2.49, status: "delivered", carrier: "Eagle Logistics", bolNumber: "BOL-88895", deliveryState: "TX", deliveryType: "commercial" },
+  { id: "LD-5010", date: "2026-02-14", customerId: "C-1003", supplierId: "S-2002", fuelType: "Regular 87", gallons: 8000, buyPrice: 2.17, sellPrice: 2.36, status: "delivered", carrier: "Swift Transport", bolNumber: "BOL-88898", deliveryState: "OK", deliveryType: "commercial" },
+];
+const initExpenses = [
+  { id: "EXP-001", date: "2026-02-20", category: "Carrier Freight", vendor: "Swift Transport", description: "Freight LD-5001", amount: 1850, loadId: "LD-5001" },
+  { id: "EXP-002", date: "2026-02-19", category: "Carrier Freight", vendor: "Eagle Logistics", description: "Freight LD-5003", amount: 2100, loadId: "LD-5003" },
+  { id: "EXP-003", date: "2026-02-18", category: "Carrier Freight", vendor: "Central Haulers", description: "Freight LD-5005", amount: 1750, loadId: "LD-5005" },
+  { id: "EXP-004", date: "2026-02-18", category: "Carrier Freight", vendor: "Heartland Carriers", description: "Freight LD-5006", amount: 1920, loadId: "LD-5006" },
+  { id: "EXP-005", date: "2026-02-17", category: "Carrier Freight", vendor: "Eagle Logistics", description: "Freight LD-5007", amount: 1980, loadId: "LD-5007" },
+  { id: "EXP-006", date: "2026-02-06", category: "Carrier Freight", vendor: "AeroHaul", description: "Freight LD-5008", amount: 3200, loadId: "LD-5008" },
+  { id: "EXP-007", date: "2026-02-10", category: "Carrier Freight", vendor: "Eagle Logistics", description: "Freight LD-5009", amount: 2050, loadId: "LD-5009" },
+  { id: "EXP-008", date: "2026-02-14", category: "Carrier Freight", vendor: "Swift Transport", description: "Freight LD-5010", amount: 1880, loadId: "LD-5010" },
+  { id: "EXP-009", date: "2026-02-01", category: "Insurance", vendor: "Fuel Guard Insurance", description: "Monthly liability premium", amount: 3200, loadId: null },
+  { id: "EXP-010", date: "2026-02-01", category: "Office", vendor: "Regus", description: "Office lease - February", amount: 2400, loadId: null },
+  { id: "EXP-011", date: "2026-02-01", category: "Software", vendor: "DTN", description: "OPIS pricing subscription", amount: 895, loadId: null },
+  { id: "EXP-012", date: "2026-02-12", category: "Compliance", vendor: "Texas Comptroller", description: "Motor fuel tax filing Q4", amount: 4500, loadId: null },
+  { id: "EXP-013", date: "2026-02-15", category: "Professional Fees", vendor: "Baker & Associates CPA", description: "Monthly bookkeeping", amount: 1800, loadId: null },
+  { id: "EXP-014", date: "2026-02-05", category: "Licensing", vendor: "DOT", description: "Carrier broker license renewal", amount: 750, loadId: null },
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ICONS
+// ═══════════════════════════════════════════════════════════════════════════════
+const Ico = ({ d, size = 18, color = "currentColor" }) => {
+  const paths = Array.isArray(d) ? d : [d];
+  return React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "1.7", strokeLinecap: "round", strokeLinejoin: "round" },
+    paths.map((p, i) => React.createElement("path", { key: i, d: p }))
+  );
+};
+const IC = {
+  dash: "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10",
+  load: ["M1 3h15v13H1z", "M16 8h4l3 3v5h-7V8z", "M5.5 18.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z", "M18.5 18.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"],
+  inv: ["M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z", "M14 2v6h6", "M16 13H8", "M16 17H8"],
+  cust: ["M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2", "M9 11a4 4 0 100-8 4 4 0 000 8z"],
+  sup: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4",
+  exp: ["M12 1v22", "M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"],
+  rpt: ["M18 20V10", "M12 20V4", "M6 20v-6"],
+  tax: ["M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z", "M12 6v6l4 2"],
+  pnl: ["M22 12h-4l-3 9L9 3l-3 9H2"],
+  plus: "M12 5v14 M5 12h14",
+  x: "M18 6L6 18 M6 6l12 12",
+  chk: "M20 6L9 17l-5-5",
+  pay: ["M20 12V8H6a2 2 0 010-4h12v4", "M4 6v12a2 2 0 002 2h14v-4", "M18 12a2 2 0 100 4 2 2 0 000-4z"],
+  eye: ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z", "M12 9a3 3 0 100 6 3 3 0 000-6z"],
+  alert: ["M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z", "M12 9v4", "M12 17h.01"],
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STYLES
+// ═══════════════════════════════════════════════════════════════════════════════
+const cardS = { background: "#0D1320", borderRadius: 10, border: "1px solid #161D2E", padding: "18px" };
+const monoS = { fontFamily: "'IBM Plex Mono', monospace" };
+const thS = { textAlign: "left", padding: "8px 10px", color: "#5A647A", fontWeight: 600, fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em" };
+const tdS = { padding: "9px 10px", borderBottom: "1px solid #161D2E11", fontSize: 12.5 };
+const lblS = { fontSize: 11, color: "#6B7690", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 };
+const btnS = (bg, fg) => ({ background: bg, color: fg, border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" });
+
+const Badge = ({ status }) => {
+  const m = { delivered: ["#10B981", "#064E3B"], "in-transit": ["#3B82F6", "#1E3A5F"], scheduled: ["#E8A525", "#5C3D0A"], outstanding: ["#E8A525", "#5C3D0A"], paid: ["#10B981", "#064E3B"], overdue: ["#EF4444", "#5C1010"], partial: ["#8B5CF6", "#3B1D72"] };
+  const [c, bg] = m[status] || ["#6B7690", "#2A2F3D"];
+  return React.createElement("span", { style: { display: "inline-block", padding: "2px 9px", borderRadius: 20, background: bg, color: c, fontSize: 10.5, fontWeight: 600, textTransform: "capitalize" } }, (status || "").replace("-", " "));
+};
+
+const Spark = ({ data, color = "#10B981", w = 100, h = 28 }) => {
+  const mx = Math.max(...data), mn = Math.min(...data), r = mx - mn || 1;
+  return React.createElement("svg", { width: w, height: h }, React.createElement("polyline", { points: data.map((v, i) => (i / (data.length - 1)) * w + "," + (h - ((v - mn) / r) * (h - 4) - 2)).join(" "), fill: "none", stroke: color, strokeWidth: "1.8", strokeLinecap: "round" }));
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════════════════════════
+function App() {
+  const [tab, setTab] = useState("dashboard");
+  const [loads, setLoads] = useState(initLoads);
+  const [invoices, setInvoices] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [expenses, setExpenses] = useState(initExpenses);
+  const [customers, setCustomers] = useState(initCustomers);
+  const [suppliers] = useState(initSuppliers);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  // Auto-gen invoices on mount
+  useEffect(() => {
+    const inv = [];
+    loads.filter(l => l.status === "delivered").forEach(l => {
+      const cust = customers.find(c => c.id === l.customerId);
+      const taxes = calcTaxes(l.fuelType, l.gallons, l.deliveryState, l.deliveryType);
+      const fuelTotal = l.gallons * l.sellPrice;
+      const li = [{ desc: l.fuelType + " — " + fmtN(l.gallons) + " gal @ " + fmt4(l.sellPrice) + "/gal", amount: fuelTotal, type: "fuel" }];
+      if (taxes.totalTax > 0) {
+        li.push({ desc: "Federal Excise Tax (" + fmt4(taxes.federalRate) + "/gal × " + fmtN(l.gallons) + ")", amount: taxes.fedTax, type: "fedtax" });
+        li.push({ desc: (STATE_FUEL_TAX[l.deliveryState]?.name || l.deliveryState) + " State Tax (" + fmt4(taxes.stateRate) + "/gal × " + fmtN(l.gallons) + ")", amount: taxes.stateTax, type: "statetax" });
+      }
+      if (taxes.exempt) li.push({ desc: "Tax Exempt: " + taxes.exemptReason, amount: 0, type: "exempt" });
+      const total = fuelTotal + taxes.totalTax;
+      inv.push({ id: "INV-" + (3001 + inv.length), loadId: l.id, customerId: l.customerId, customerName: cust?.name || "Unknown", date: l.date, dueDate: addDays(l.date, cust?.terms || 10), terms: cust?.terms || 10, lineItems: li, subtotal: fuelTotal, fedTax: taxes.fedTax, stateTax: taxes.stateTax, totalTax: taxes.totalTax, total, paid: 0, status: "outstanding", deliveryState: l.deliveryState, fuelType: l.fuelType, gallons: l.gallons, taxExempt: taxes.exempt, exemptReason: taxes.exemptReason });
+    });
+    if (inv[1]) { inv[1].paid = inv[1].total; inv[1].status = "paid"; }
+    if (inv[2]) { inv[2].paid = inv[2].total; inv[2].status = "paid"; }
+    if (inv[4]) { inv[4].paid = inv[4].total; inv[4].status = "paid"; }
+    if (inv[5]) { inv[5].paid = inv[5].total; inv[5].status = "paid"; }
+    if (inv[7]) { inv[7].dueDate = "2026-02-15"; inv[7].status = "overdue"; }
+    setInvoices(inv);
+    setPayments(inv.filter(i => i.status === "paid").map((i, x) => ({ id: "PMT-" + (7000 + x), invoiceId: i.id, customerId: i.customerId, customerName: i.customerName, date: addDays(i.date, 3 + x), amount: i.total, method: ["ACH", "Wire", "Check"][x % 3], reference: "REF-" + (90000 + x) })));
+  }, []);
+
+  const showToast = (msg, type = "success") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
+
+  const recordPayment = (invoiceId, amount, method, reference) => {
+    setInvoices(prev => prev.map(inv => inv.id !== invoiceId ? inv : { ...inv, paid: inv.paid + amount, status: inv.paid + amount >= inv.total ? "paid" : "partial" }));
+    const inv = invoices.find(i => i.id === invoiceId);
+    setPayments(prev => [...prev, { id: genId("PMT"), invoiceId, amount, method, reference, date: today(), customerId: inv?.customerId, customerName: inv?.customerName }]);
+    showToast("Payment of " + fmt(amount) + " recorded against " + invoiceId);
+  };
+
+  const createInvoice = (inv) => { setInvoices(prev => [...prev, inv]); setModal(null); showToast("Invoice " + inv.id + " created for " + fmt(inv.total)); };
+
+  // P&L auto-calc
+  const pnl = useMemo(() => {
+    const del = loads.filter(l => l.status === "delivered");
+    const revenue = del.reduce((s, l) => s + l.gallons * l.sellPrice, 0);
+    const fuelCost = del.reduce((s, l) => s + l.gallons * l.buyPrice, 0);
+    const carrierExp = expenses.filter(e => e.category === "Carrier Freight").reduce((s, e) => s + e.amount, 0);
+    const cogs = fuelCost + carrierExp;
+    const grossProfit = revenue - cogs;
+    const opexByCat = {};
+    expenses.filter(e => e.category !== "Carrier Freight").forEach(e => { opexByCat[e.category] = (opexByCat[e.category] || 0) + e.amount; });
+    const totalOpex = Object.values(opexByCat).reduce((a, b) => a + b, 0);
+    const totalGallons = del.reduce((s, l) => s + l.gallons, 0);
+    return { revenue, fuelCost, carrierExp, cogs, grossProfit, opexByCat, totalOpex, netIncome: grossProfit - totalOpex, totalGallons, loadCount: del.length };
+  }, [loads, expenses]);
+
+  const taxSum = useMemo(() => {
+    const bySt = {}, byFt = {};
+    invoices.forEach(inv => {
+      const st = inv.deliveryState, ft = inv.fuelType;
+      if (!bySt[st]) bySt[st] = { fed: 0, state: 0, total: 0, gal: 0, cnt: 0, exempt: 0 };
+      bySt[st].fed += inv.fedTax; bySt[st].state += inv.stateTax; bySt[st].total += inv.totalTax; bySt[st].gal += inv.gallons; bySt[st].cnt++; if (inv.taxExempt) bySt[st].exempt++;
+      if (!byFt[ft]) byFt[ft] = { fed: 0, state: 0, total: 0, gal: 0 };
+      byFt[ft].fed += inv.fedTax; byFt[ft].state += inv.stateTax; byFt[ft].total += inv.totalTax; byFt[ft].gal += inv.gallons;
+    });
+    const tf = Object.values(bySt).reduce((s, v) => s + v.fed, 0), ts = Object.values(bySt).reduce((s, v) => s + v.state, 0);
+    return { bySt, byFt, totalFed: tf, totalState: ts, grand: tf + ts };
+  }, [invoices]);
+
+  const ar = invoices.filter(i => i.status !== "paid").reduce((s, i) => s + (i.total - i.paid), 0);
+  const overdue = invoices.filter(i => i.status === "overdue").reduce((s, i) => s + (i.total - i.paid), 0);
+
+  const navItems = [
+    { id: "dashboard", label: "Dashboard", icon: IC.dash }, { id: "loads", label: "Loads & Trades", icon: IC.load },
+    { id: "invoices", label: "Invoices & Billing", icon: IC.inv }, { id: "payments", label: "Payments", icon: IC.pay },
+    { id: "pnl", label: "Profit & Loss", icon: IC.pnl }, { id: "taxes", label: "Tax Center", icon: IC.tax },
+    { id: "customers", label: "Customers", icon: IC.cust }, { id: "expenses", label: "Expenses", icon: IC.exp },
+    { id: "reports", label: "Reports", icon: IC.rpt },
+  ];
+
+  return React.createElement("div", { style: { display: "flex", height: "100vh", fontFamily: "'Outfit', sans-serif", background: "#06090F", color: "#D4DAE3", overflow: "hidden" } },
+    // Sidebar
+    React.createElement("aside", { style: { width: 220, background: "#0A0F1A", borderRight: "1px solid #161D2E", display: "flex", flexDirection: "column", flexShrink: 0 } },
+      React.createElement("div", { style: { padding: "16px", borderBottom: "1px solid #161D2E", display: "flex", alignItems: "center", gap: 10 } },
+        React.createElement("div", { style: { width: 32, height: 32, borderRadius: 7, background: "linear-gradient(135deg, #E8A525, #C67D12)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12, color: "#06090F" } }, "FB"),
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#F4F6F9" } }, "FuelBooks Pro"),
+          React.createElement("div", { style: { fontSize: 8.5, color: "#5A647A", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" } }, "Brokerage Accounting"))),
+      React.createElement("nav", { style: { flex: 1, padding: "8px 6px", overflowY: "auto" } },
+        navItems.map(item => React.createElement("button", { key: item.id, onClick: () => setTab(item.id), style: { display: "flex", alignItems: "center", gap: 9, padding: "8px 10px", borderRadius: 6, border: "none", cursor: "pointer", background: tab === item.id ? "rgba(232,165,37,0.10)" : "transparent", color: tab === item.id ? "#E8A525" : "#6B7690", fontWeight: tab === item.id ? 600 : 500, fontSize: 12, textAlign: "left", width: "100%", fontFamily: "inherit", borderLeft: tab === item.id ? "2px solid #E8A525" : "2px solid transparent", marginBottom: 1 } },
+          React.createElement(Ico, { d: item.icon, size: 15 }), item.label))),
+      React.createElement("div", { style: { padding: "12px 14px", borderTop: "1px solid #161D2E", fontSize: 9.5, color: "#3D4659" } }, "Tru Skool Entertainment Intl Corp.")),
+    // Main
+    React.createElement("main", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" } },
+      React.createElement("header", { style: { height: 52, padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #161D2E", background: "#0A0F1A", flexShrink: 0 } },
+        React.createElement("h1", { style: { fontSize: 15, fontWeight: 700, color: "#F4F6F9", margin: 0 } }, navItems.find(n => n.id === tab)?.label),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("button", { onClick: () => setModal("newLoad"), style: { ...btnS("#E8A525", "#06090F"), display: "flex", alignItems: "center", gap: 5 } }, React.createElement(Ico, { d: IC.plus, size: 13, color: "#06090F" }), "New Load"),
+          React.createElement("button", { onClick: () => setModal("newInvoice"), style: { ...btnS("#2563EB", "#FFF"), display: "flex", alignItems: "center", gap: 5 } }, React.createElement(Ico, { d: IC.inv, size: 13, color: "#FFF" }), "New Invoice"))),
+      React.createElement("div", { style: { flex: 1, overflow: "auto", padding: "18px 20px" } },
+        tab === "dashboard" && React.createElement(Dashboard, { pnl, ar, overdue, invoices, taxSum }),
+        tab === "loads" && React.createElement(LoadsTab, { loads, customers, suppliers, onSelect: l => setModal({ t: "loadDetail", l }) }),
+        tab === "invoices" && React.createElement(InvoicesTab, { invoices, onView: i => setModal({ t: "invDetail", i }), onPay: i => setModal({ t: "recPay", i }) }),
+        tab === "payments" && React.createElement(PaymentsTab, { payments }),
+        tab === "pnl" && React.createElement(PnLTab, { pnl, loads }),
+        tab === "taxes" && React.createElement(TaxTab, { taxSum }),
+        tab === "customers" && React.createElement(CustTab, { customers, invoices }),
+        tab === "expenses" && React.createElement(ExpTab, { expenses }),
+        tab === "reports" && React.createElement(RptTab, { pnl, taxSum, invoices, loads, customers }))),
+    // Modals
+    modal === "newLoad" && React.createElement(NewLoadModal, { customers, suppliers, onClose: () => setModal(null), onSave: l => { setLoads(p => [...p, l]); setModal(null); showToast("Load " + l.id + " created"); } }),
+    modal === "newInvoice" && React.createElement(NewInvModal, { loads, customers, invoices, onClose: () => setModal(null), onSave: createInvoice }),
+    modal?.t === "invDetail" && React.createElement(InvDetailModal, { inv: modal.i, onClose: () => setModal(null), onPay: () => setModal({ t: "recPay", i: modal.i }) }),
+    modal?.t === "recPay" && React.createElement(RecPayModal, { inv: modal.i, onClose: () => setModal(null), onRecord: recordPayment }),
+    modal?.t === "loadDetail" && React.createElement(LoadDetailModal, { load: modal.l, customers, suppliers, onClose: () => setModal(null) }),
+    // Toast
+    toast && React.createElement("div", { style: { position: "fixed", bottom: 24, right: 24, padding: "12px 20px", borderRadius: 10, background: toast.type === "success" ? "#065F46" : "#7F1D1D", color: "#F4F6F9", fontSize: 13, fontWeight: 600, boxShadow: "0 8px 30px rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "center", gap: 8, animation: "slideUp 0.3s" } }, React.createElement(Ico, { d: IC.chk, size: 15 }), toast.msg)
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+function Dashboard({ pnl, ar, overdue, invoices, taxSum }) {
+  const kpis = [
+    { label: "Revenue (MTD)", val: fmt(pnl.revenue), sub: fmtN(pnl.totalGallons) + " gal · " + pnl.loadCount + " loads", color: "#10B981", spark: [28000, 34000, 31000, pnl.revenue / 4] },
+    { label: "Gross Profit", val: fmt(pnl.grossProfit), sub: pct(pnl.grossProfit / pnl.revenue) + " margin", color: "#E8A525", spark: [5000, 6200, 5800, pnl.grossProfit / 3] },
+    { label: "Net Income", val: fmt(pnl.netIncome), sub: pct(pnl.netIncome / pnl.revenue) + " net margin", color: pnl.netIncome >= 0 ? "#10B981" : "#EF4444", spark: [3000, 4200, pnl.netIncome / 3] },
+    { label: "Accounts Receivable", val: fmt(ar), sub: overdue > 0 ? fmt(overdue) + " overdue" : "All current", color: overdue > 0 ? "#EF4444" : "#10B981", spark: [42000, 38000, ar] },
+    { label: "Tax Collected", val: fmt(taxSum.grand), sub: "Fed " + fmt(taxSum.totalFed) + " · St " + fmt(taxSum.totalState), color: "#8B5CF6", spark: [3000, 4000, taxSum.grand] },
+    { label: "Opex", val: fmt(pnl.totalOpex), sub: Object.keys(pnl.opexByCat).length + " categories", color: "#EF4444", spark: [10000, 12000, pnl.totalOpex] },
+  ];
+  return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16 } },
+    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 } },
+      kpis.map((k, i) => React.createElement("div", { key: i, style: cardS },
+        React.createElement("div", { style: { ...lblS, marginBottom: 8 } }, k.label),
+        React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: "#F4F6F9", ...monoS } }, k.val),
+        React.createElement("div", { style: { fontSize: 11, color: "#5A647A", margin: "3px 0 8px" } }, k.sub),
+        React.createElement(Spark, { data: k.spark, color: k.color })))),
+    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
+      React.createElement("div", { style: cardS },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#F4F6F9", marginBottom: 12 } }, "Tax Liability by State"),
+        Object.entries(taxSum.bySt).sort((a, b) => b[1].total - a[1].total).map(([st, d]) => React.createElement("div", { key: st, style: { display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #161D2E22" } },
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+            React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#E8A525", background: "#1A1510", padding: "1px 6px", borderRadius: 3 } }, st),
+            React.createElement("span", { style: { fontSize: 10.5, color: "#5A647A" } }, STATE_FUEL_TAX[st]?.name)),
+          React.createElement("div", { style: { textAlign: "right" } },
+            React.createElement("div", { style: { ...monoS, fontSize: 12, fontWeight: 600, color: "#8B5CF6" } }, fmt(d.total)),
+            React.createElement("div", { style: { fontSize: 10, color: "#5A647A" } }, fmtN(d.gal) + " gal"))))),
+      React.createElement("div", { style: cardS },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#F4F6F9", marginBottom: 12 } }, "P&L Summary"),
+        [["Revenue", fmt(pnl.revenue), "#10B981"], ["COGS", fmt(pnl.cogs), "#EF4444"], ["Gross Profit", fmt(pnl.grossProfit), "#E8A525"], ["Opex", fmt(pnl.totalOpex), "#EF4444"], ["Net Income", fmt(pnl.netIncome), pnl.netIncome >= 0 ? "#10B981" : "#EF4444"]].map(([l, v, c], i) =>
+          React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: i < 4 ? "1px solid #161D2E22" : "2px solid #E8A52533" } },
+            React.createElement("span", { style: { fontSize: 12.5, color: i === 4 ? "#F4F6F9" : "#8E96A8", fontWeight: i === 4 ? 700 : 400 } }, l),
+            React.createElement("span", { style: { ...monoS, fontSize: 12.5, fontWeight: 600, color: c } }, v))))));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOADS TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function LoadsTab({ loads, customers, suppliers, onSelect }) {
+  const [fl, setFl] = useState("all");
+  const filtered = fl === "all" ? loads : loads.filter(l => l.status === fl);
+  return React.createElement("div", null,
+    React.createElement("div", { style: { display: "flex", gap: 5, marginBottom: 14 } },
+      ["all", "scheduled", "in-transit", "delivered"].map(s => React.createElement("button", { key: s, onClick: () => setFl(s), style: { padding: "4px 11px", borderRadius: 5, border: "1px solid " + (fl === s ? "#E8A525" : "#1E2538"), background: fl === s ? "rgba(232,165,37,0.1)" : "transparent", color: fl === s ? "#E8A525" : "#6B7690", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" } }, s))),
+    React.createElement("div", { style: { ...cardS, padding: 0, overflow: "auto" } },
+      React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", minWidth: 900 } },
+        React.createElement("thead", null, React.createElement("tr", { style: { background: "#080C16" } },
+          ["Load #", "Date", "Customer", "Supplier", "Fuel", "Gal", "Buy", "Sell", "Margin", "Tax", "Status"].map(h => React.createElement("th", { key: h, style: thS }, h)))),
+        React.createElement("tbody", null, filtered.map(l => {
+          const c = customers.find(x => x.id === l.customerId);
+          const taxes = calcTaxes(l.fuelType, l.gallons, l.deliveryState, l.deliveryType);
+          const margin = (l.sellPrice - l.buyPrice) * l.gallons;
+          return React.createElement("tr", { key: l.id, onClick: () => onSelect(l), style: { cursor: "pointer" } },
+            React.createElement("td", { style: { ...tdS, ...monoS, color: "#E8A525", fontWeight: 500, fontSize: 11 } }, l.id),
+            React.createElement("td", { style: { ...tdS, color: "#6B7690" } }, l.date),
+            React.createElement("td", { style: { ...tdS, color: "#D4DAE3", fontWeight: 500 } }, c?.name),
+            React.createElement("td", { style: { ...tdS, color: "#6B7690" } }, suppliers.find(s => s.id === l.supplierId)?.name),
+            React.createElement("td", { style: tdS }, React.createElement("span", { style: { background: "#131A29", padding: "1px 6px", borderRadius: 3, fontSize: 10 } }, l.fuelType)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11 } }, fmtN(l.gallons)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#6B7690" } }, fmt4(l.buyPrice)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11 } }, fmt4(l.sellPrice)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#10B981", fontWeight: 600 } }, fmt(margin)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 10.5, color: taxes.exempt ? "#6B7690" : "#8B5CF6" } }, taxes.exempt ? "EXEMPT" : fmt(taxes.totalTax)),
+            React.createElement("td", { style: tdS }, React.createElement(Badge, { status: l.status })));
+        })))));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INVOICES TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function InvoicesTab({ invoices, onView, onPay }) {
+  const [fl, setFl] = useState("all");
+  const filtered = fl === "all" ? invoices : invoices.filter(i => i.status === fl);
+  return React.createElement("div", null,
+    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 } },
+      [["Outstanding", invoices.filter(i => i.status === "outstanding").reduce((s, i) => s + i.total - i.paid, 0), "#E8A525"],
+       ["Overdue", invoices.filter(i => i.status === "overdue").reduce((s, i) => s + i.total - i.paid, 0), "#EF4444"],
+       ["Paid (MTD)", invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.total, 0), "#10B981"],
+       ["Tax Collected", invoices.reduce((s, i) => s + i.totalTax, 0), "#8B5CF6"]].map(([l, v, c], i) =>
+        React.createElement("div", { key: i, style: cardS },
+          React.createElement("div", { style: lblS }, l),
+          React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: c, ...monoS, marginTop: 5 } }, fmt(v))))),
+    React.createElement("div", { style: { display: "flex", gap: 5, marginBottom: 14 } },
+      ["all", "outstanding", "overdue", "partial", "paid"].map(s => React.createElement("button", { key: s, onClick: () => setFl(s), style: { padding: "4px 11px", borderRadius: 5, border: "1px solid " + (fl === s ? "#E8A525" : "#1E2538"), background: fl === s ? "rgba(232,165,37,0.1)" : "transparent", color: fl === s ? "#E8A525" : "#6B7690", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" } }, s))),
+    React.createElement("div", { style: { ...cardS, padding: 0, overflow: "auto" } },
+      React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", minWidth: 1000 } },
+        React.createElement("thead", null, React.createElement("tr", { style: { background: "#080C16" } },
+          ["Inv #", "Date", "Due", "Customer", "Load", "State", "Subtotal", "Tax", "Total", "Paid", "Balance", "Status", ""].map(h => React.createElement("th", { key: h, style: thS }, h)))),
+        React.createElement("tbody", null, filtered.map(inv => {
+          const bal = inv.total - inv.paid;
+          return React.createElement("tr", { key: inv.id },
+            React.createElement("td", { style: { ...tdS, ...monoS, color: "#E8A525", fontWeight: 500, fontSize: 11 } }, inv.id),
+            React.createElement("td", { style: { ...tdS, color: "#6B7690" } }, inv.date),
+            React.createElement("td", { style: { ...tdS, color: inv.status === "overdue" ? "#EF4444" : "#6B7690", fontWeight: inv.status === "overdue" ? 600 : 400 } }, inv.dueDate),
+            React.createElement("td", { style: { ...tdS, color: "#D4DAE3", fontWeight: 500 } }, inv.customerName),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 10.5, color: "#6B7690" } }, inv.loadId),
+            React.createElement("td", { style: tdS }, React.createElement("span", { style: { background: "#131A29", padding: "1px 5px", borderRadius: 3, fontSize: 10, fontWeight: 600, color: "#8B5CF6" } }, inv.deliveryState)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11 } }, fmt(inv.subtotal)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: inv.taxExempt ? "#5A647A" : "#8B5CF6" } }, inv.taxExempt ? "—" : fmt(inv.totalTax)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, fontWeight: 600, color: "#F4F6F9" } }, fmt(inv.total)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#10B981" } }, fmt(inv.paid)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, fontWeight: 600, color: bal > 0 ? "#E8A525" : "#10B981" } }, fmt(bal)),
+            React.createElement("td", { style: tdS }, React.createElement(Badge, { status: inv.status })),
+            React.createElement("td", { style: { ...tdS, display: "flex", gap: 3 } },
+              React.createElement("button", { onClick: () => onView(inv), style: { background: "rgba(59,130,246,0.1)", border: "none", borderRadius: 3, padding: "3px 5px", cursor: "pointer" } }, React.createElement(Ico, { d: IC.eye, size: 12, color: "#3B82F6" })),
+              inv.status !== "paid" && React.createElement("button", { onClick: () => onPay(inv), style: { background: "rgba(16,185,129,0.1)", border: "none", borderRadius: 3, padding: "3px 5px", cursor: "pointer" } }, React.createElement(Ico, { d: IC.pay, size: 12, color: "#10B981" }))));
+        })))));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PAYMENTS TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function PaymentsTab({ payments }) {
+  return React.createElement("div", null,
+    React.createElement("div", { style: { ...cardS, marginBottom: 14, display: "flex", justifyContent: "space-between" } },
+      React.createElement("div", null, React.createElement("div", { style: lblS }, "Total Collected"), React.createElement("div", { style: { fontSize: 22, fontWeight: 700, color: "#10B981", ...monoS, marginTop: 4 } }, fmt(payments.reduce((s, p) => s + p.amount, 0)))),
+      React.createElement("div", { style: { textAlign: "right" } }, React.createElement("div", { style: lblS }, "Payments"), React.createElement("div", { style: { fontSize: 22, fontWeight: 700, color: "#F4F6F9", marginTop: 4 } }, payments.length))),
+    React.createElement("div", { style: { ...cardS, padding: 0, overflow: "auto" } },
+      React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+        React.createElement("thead", null, React.createElement("tr", { style: { background: "#080C16" } },
+          ["Payment #", "Date", "Invoice", "Customer", "Amount", "Method", "Ref"].map(h => React.createElement("th", { key: h, style: thS }, h)))),
+        React.createElement("tbody", null, payments.map(p => React.createElement("tr", { key: p.id },
+          React.createElement("td", { style: { ...tdS, ...monoS, color: "#10B981", fontSize: 11, fontWeight: 500 } }, p.id),
+          React.createElement("td", { style: { ...tdS, color: "#6B7690" } }, p.date),
+          React.createElement("td", { style: { ...tdS, ...monoS, color: "#E8A525", fontSize: 11 } }, p.invoiceId),
+          React.createElement("td", { style: { ...tdS, color: "#D4DAE3" } }, p.customerName),
+          React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 12, fontWeight: 600, color: "#10B981" } }, fmt(p.amount)),
+          React.createElement("td", { style: tdS }, React.createElement("span", { style: { background: "#131A29", padding: "2px 6px", borderRadius: 3, fontSize: 10 } }, p.method)),
+          React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#6B7690" } }, p.reference)))))));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// P&L TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function PnLTab({ pnl, loads }) {
+  const PLRow = (l, a, opts = {}) => React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: (opts.big ? 6 : 3) + "px " + (opts.indent ? 14 : 0) + "px" } },
+    React.createElement("span", { style: { fontSize: opts.big ? 14 : 12.5, fontWeight: opts.bold ? 700 : 400, color: opts.bold ? "#F4F6F9" : "#8E96A8" } }, l),
+    React.createElement("span", { style: { ...monoS, fontSize: opts.big ? 15 : 12.5, fontWeight: opts.bold ? 700 : 500, color: opts.color || (a < 0 ? "#EF4444" : "#D4DAE3") } }, a < 0 ? "(" + fmt(Math.abs(a)) + ")" : fmt(a)));
+  const Div = (thick, gold) => React.createElement("div", { style: { height: thick ? 2 : 1, background: gold ? "#E8A52533" : "#1E2538", margin: "5px 0" } });
+
+  return React.createElement("div", { style: cardS },
+    React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#F4F6F9", marginBottom: 3 } }, "Profit & Loss Statement"),
+    React.createElement("div", { style: { fontSize: 11.5, color: "#5A647A", marginBottom: 16 } }, "February 2026 · Auto-calculated"),
+    React.createElement("div", { style: { fontSize: 10.5, color: "#5A647A", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5, paddingBottom: 3, borderBottom: "1px solid #1E2538" } }, "Revenue"),
+    PLRow("Fuel Sales Revenue", pnl.revenue, { bold: false }),
+    Div(), PLRow("Total Revenue", pnl.revenue, { bold: true, color: "#10B981" }),
+    React.createElement("div", { style: { fontSize: 10.5, color: "#5A647A", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 14, marginBottom: 5, paddingBottom: 3, borderBottom: "1px solid #1E2538" } }, "Cost of Goods Sold"),
+    PLRow("Cost of Fuel Purchased", -pnl.fuelCost, { indent: true }),
+    PLRow("Carrier & Freight Costs", -pnl.carrierExp, { indent: true }),
+    Div(), PLRow("Total COGS", -pnl.cogs, { bold: true, color: "#EF4444" }),
+    Div(true, true), PLRow("Gross Profit", pnl.grossProfit, { bold: true, big: true, color: pnl.grossProfit >= 0 ? "#10B981" : "#EF4444" }),
+    React.createElement("div", { style: { fontSize: 10.5, color: "#5A647A", marginBottom: 8, paddingLeft: 14 } }, pct(pnl.grossProfit / pnl.revenue) + " gross margin · " + fmt(pnl.grossProfit / pnl.totalGallons) + "/gal"),
+    React.createElement("div", { style: { fontSize: 10.5, color: "#5A647A", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 10, marginBottom: 5, paddingBottom: 3, borderBottom: "1px solid #1E2538" } }, "Operating Expenses"),
+    ...Object.entries(pnl.opexByCat).sort((a, b) => b[1] - a[1]).map(([c, a]) => PLRow(c, -a, { indent: true })),
+    Div(), PLRow("Total Opex", -pnl.totalOpex, { bold: true, color: "#EF4444" }),
+    Div(true, true), PLRow("Net Income", pnl.netIncome, { bold: true, big: true, color: pnl.netIncome >= 0 ? "#10B981" : "#EF4444" }),
+    React.createElement("div", { style: { fontSize: 10.5, color: "#5A647A", paddingLeft: 14 } }, pct(pnl.netIncome / pnl.revenue) + " net margin"));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAX CENTER
+// ═══════════════════════════════════════════════════════════════════════════════
+function TaxTab({ taxSum }) {
+  return React.createElement("div", null,
+    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 16 } },
+      [["Federal Excise", fmt(taxSum.totalFed), "#8B5CF6"], ["State Taxes", fmt(taxSum.totalState), "#3B82F6"], ["Total Liability", fmt(taxSum.grand), "#EF4444"]].map(([l, v, c], i) =>
+        React.createElement("div", { key: i, style: cardS },
+          React.createElement("div", { style: lblS }, l),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: c, ...monoS, marginTop: 5 } }, v)))),
+    React.createElement("div", { style: { ...cardS, padding: 0, overflow: "auto", marginBottom: 14 } },
+      React.createElement("div", { style: { padding: "14px 16px", fontWeight: 700, fontSize: 13, color: "#F4F6F9" } }, "By Delivery State"),
+      React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+        React.createElement("thead", null, React.createElement("tr", { style: { background: "#080C16" } },
+          ["State", "Gallons", "Federal", "State", "Total", "Rate/gal", "Exempt"].map(h => React.createElement("th", { key: h, style: thS }, h)))),
+        React.createElement("tbody", null, Object.entries(taxSum.bySt).sort((a, b) => b[1].total - a[1].total).map(([st, d]) =>
+          React.createElement("tr", { key: st },
+            React.createElement("td", { style: tdS }, React.createElement("span", { style: { fontWeight: 700, color: "#E8A525" } }, st), " ", React.createElement("span", { style: { color: "#5A647A", fontSize: 10.5 } }, STATE_FUEL_TAX[st]?.name)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11 } }, fmtN(d.gal)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#8B5CF6" } }, fmt(d.fed)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#3B82F6" } }, fmt(d.state)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, fontWeight: 600, color: "#EF4444" } }, fmt(d.total)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#6B7690" } }, d.gal > 0 ? fmt4(d.total / d.gal) : "—"),
+            React.createElement("td", { style: { ...tdS, color: d.exempt > 0 ? "#E8A525" : "#5A647A" } }, d.exempt || "—")))))),
+    React.createElement("div", { style: { ...cardS, padding: 0, overflow: "auto" } },
+      React.createElement("div", { style: { padding: "14px 16px", fontWeight: 700, fontSize: 13, color: "#F4F6F9" } }, "By Fuel Type"),
+      React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+        React.createElement("thead", null, React.createElement("tr", { style: { background: "#080C16" } },
+          ["Fuel", "Gallons", "Fed Rate", "Federal", "State", "Total"].map(h => React.createElement("th", { key: h, style: thS }, h)))),
+        React.createElement("tbody", null, Object.entries(taxSum.byFt).sort((a, b) => b[1].total - a[1].total).map(([ft, d]) =>
+          React.createElement("tr", { key: ft },
+            React.createElement("td", { style: { ...tdS, color: "#D4DAE3", fontWeight: 500 } }, ft),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11 } }, fmtN(d.gal)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#6B7690" } }, fmt4(FEDERAL_FUEL_TAX[ft] || 0)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#8B5CF6" } }, fmt(d.fed)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, color: "#3B82F6" } }, fmt(d.state)),
+            React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, fontWeight: 600, color: "#EF4444" } }, fmt(d.total))))))));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CUSTOMERS, EXPENSES, REPORTS (compact)
+// ═══════════════════════════════════════════════════════════════════════════════
+function CustTab({ customers, invoices }) {
+  return React.createElement("div", { style: { ...cardS, padding: 0, overflow: "auto" } },
+    React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+      React.createElement("thead", null, React.createElement("tr", { style: { background: "#080C16" } },
+        ["Company", "Contact", "State", "Terms", "Credit Limit", "AR Balance", "Tax"].map(h => React.createElement("th", { key: h, style: thS }, h)))),
+      React.createElement("tbody", null, customers.map(c => {
+        const bal = invoices.filter(i => i.customerId === c.id && i.status !== "paid").reduce((s, i) => s + i.total - i.paid, 0);
+        return React.createElement("tr", { key: c.id },
+          React.createElement("td", { style: { ...tdS, color: "#D4DAE3", fontWeight: 600 } }, c.name),
+          React.createElement("td", { style: tdS }, React.createElement("div", { style: { fontSize: 12 } }, c.contact), React.createElement("div", { style: { fontSize: 10, color: "#5A647A" } }, c.email)),
+          React.createElement("td", { style: tdS }, React.createElement("span", { style: { background: "#131A29", padding: "1px 5px", borderRadius: 3, fontSize: 10, fontWeight: 600, color: "#E8A525" } }, c.state)),
+          React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11 } }, "Net " + c.terms),
+          React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11 } }, fmt(c.creditLimit)),
+          React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 11, fontWeight: 600, color: bal > 0 ? "#E8A525" : "#10B981" } }, fmt(bal)),
+          React.createElement("td", { style: tdS }, c.taxExempt ? React.createElement("span", { style: { color: "#E8A525", fontSize: 10, fontWeight: 600 } }, "EXEMPT") : React.createElement("span", { style: { color: "#5A647A", fontSize: 10 } }, "Taxable")));
+      }))));
+}
+
+function ExpTab({ expenses }) {
+  return React.createElement("div", { style: { ...cardS, padding: 0, overflow: "auto" } },
+    React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+      React.createElement("thead", null, React.createElement("tr", { style: { background: "#080C16" } },
+        ["Date", "Category", "Vendor", "Description", "Load", "Amount"].map(h => React.createElement("th", { key: h, style: thS }, h)))),
+      React.createElement("tbody", null, expenses.map(e => React.createElement("tr", { key: e.id },
+        React.createElement("td", { style: { ...tdS, color: "#6B7690" } }, e.date),
+        React.createElement("td", { style: tdS }, React.createElement("span", { style: { background: "#131A29", padding: "1px 6px", borderRadius: 3, fontSize: 10 } }, e.category)),
+        React.createElement("td", { style: { ...tdS, color: "#D4DAE3" } }, e.vendor),
+        React.createElement("td", { style: { ...tdS, color: "#6B7690", fontSize: 11 } }, e.description),
+        React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 10.5, color: e.loadId ? "#E8A525" : "#2A303E" } }, e.loadId || "—"),
+        React.createElement("td", { style: { ...tdS, ...monoS, fontSize: 12, fontWeight: 600, color: "#EF4444" } }, fmt(e.amount)))))));
+}
+
+function RptTab({ pnl, taxSum, invoices, loads, customers }) {
+  return React.createElement("div", { style: cardS },
+    React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#F4F6F9", marginBottom: 14 } }, "Key Performance Indicators"),
+    [["Loads Completed", pnl.loadCount], ["Total Gallons", fmtN(pnl.totalGallons)], ["Revenue", fmt(pnl.revenue)], ["Gross Profit", fmt(pnl.grossProfit)], ["Gross Margin %", pct(pnl.grossProfit / pnl.revenue)], ["Margin/Gallon", fmt(pnl.grossProfit / pnl.totalGallons)], ["Net Income", fmt(pnl.netIncome)], ["Net Margin %", pct(pnl.netIncome / pnl.revenue)], ["Tax Collected", fmt(taxSum.grand)]].map(([l, v], i) =>
+      React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #161D2E22" } },
+        React.createElement("span", { style: { fontSize: 12.5, color: "#8E96A8" } }, l),
+        React.createElement("span", { style: { ...monoS, fontSize: 12.5, fontWeight: 600, color: "#F4F6F9" } }, v))));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODALS
+// ═══════════════════════════════════════════════════════════════════════════════
+function Overlay({ children, onClose }) {
+  return React.createElement("div", { onClick: onClose, style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(6px)" } },
+    React.createElement("div", { onClick: e => e.stopPropagation(), style: { background: "#0D1320", borderRadius: 14, border: "1px solid #1E2538", maxHeight: "88vh", overflow: "auto" } }, children));
+}
+
+function Field({ label, value, onChange, placeholder, type, options }) {
+  const base = { width: "100%", padding: "8px 11px", borderRadius: 6, border: "1px solid #1E2538", background: "#080C16", color: "#D4DAE3", fontSize: 12, fontFamily: "'Outfit', sans-serif", outline: "none", boxSizing: "border-box" };
+  return React.createElement("div", null,
+    React.createElement("label", { style: { display: "block", ...lblS, marginBottom: 4 } }, label),
+    options ? React.createElement("select", { value: value, onChange: e => onChange(e.target.value), style: { ...base, appearance: "auto" } },
+      React.createElement("option", { value: "" }, "— Select —"),
+      options.map(o => React.createElement("option", { key: o.value, value: o.value }, o.label)))
+    : React.createElement("input", { type: type || "text", value: value, onChange: e => onChange(e.target.value), placeholder, style: base }));
+}
+
+function NewLoadModal({ customers, suppliers, onClose, onSave }) {
+  const [f, setF] = useState({ customerId: "", supplierId: "", fuelType: "", gallons: "", buyPrice: "", sellPrice: "", carrier: "", date: today(), deliveryState: "", deliveryType: "commercial" });
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const cust = customers.find(c => c.id === f.customerId);
+  useEffect(() => { if (cust) { set("deliveryState", cust.state); set("deliveryType", cust.deliveryType); } }, [f.customerId]);
+  const gal = parseFloat(f.gallons) || 0, buy = parseFloat(f.buyPrice) || 0, sell = parseFloat(f.sellPrice) || 0;
+  const taxes = calcTaxes(f.fuelType, gal, f.deliveryState, f.deliveryType);
+  const valid = f.customerId && f.supplierId && f.fuelType && gal > 0 && buy > 0 && sell > 0;
+  return React.createElement(Overlay, { onClose },
+    React.createElement("div", { style: { width: 640, padding: "24px 26px" } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 18 } },
+        React.createElement("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "#F4F6F9" } }, "New Load / Trade"),
+        React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", cursor: "pointer" } }, React.createElement(Ico, { d: IC.x, size: 16, color: "#5A647A" }))),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
+        React.createElement(Field, { label: "Customer", value: f.customerId, onChange: v => set("customerId", v), options: customers.map(c => ({ value: c.id, label: c.name })) }),
+        React.createElement(Field, { label: "Supplier", value: f.supplierId, onChange: v => set("supplierId", v), options: suppliers.map(s => ({ value: s.id, label: s.name })) }),
+        React.createElement(Field, { label: "Fuel Type", value: f.fuelType, onChange: v => set("fuelType", v), options: FUEL_TYPES.map(t => ({ value: t, label: t })) }),
+        React.createElement(Field, { label: "Gallons", value: f.gallons, onChange: v => set("gallons", v), placeholder: "8500", type: "number" }),
+        React.createElement(Field, { label: "Buy Price ($/gal)", value: f.buyPrice, onChange: v => set("buyPrice", v), placeholder: "2.3400", type: "number" }),
+        React.createElement(Field, { label: "Sell Price ($/gal)", value: f.sellPrice, onChange: v => set("sellPrice", v), placeholder: "2.5200", type: "number" }),
+        React.createElement(Field, { label: "Delivery State", value: f.deliveryState, onChange: v => set("deliveryState", v), options: ALL_STATES.map(s => ({ value: s.code, label: s.code + " — " + s.name })) }),
+        React.createElement(Field, { label: "Delivery Type", value: f.deliveryType, onChange: v => set("deliveryType", v), options: [{ value: "commercial", label: "Commercial" }, { value: "government", label: "Government (Exempt)" }, { value: "export", label: "Export (Exempt)" }, { value: "airline", label: "Airline (Jet-A Exempt)" }] }),
+        React.createElement(Field, { label: "Carrier", value: f.carrier, onChange: v => set("carrier", v), placeholder: "Carrier name" }),
+        React.createElement(Field, { label: "Date", value: f.date, onChange: v => set("date", v), type: "date" })),
+      React.createElement("div", { style: { marginTop: 14, padding: 14, background: "#080C16", borderRadius: 8, border: "1px solid #1E2538", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, textAlign: "center" } },
+        [["COST", fmt(gal * buy), "#EF4444"], ["REV", fmt(gal * sell), "#10B981"], ["MARGIN", fmt(gal * (sell - buy)), "#E8A525"], ["$/GAL", gal > 0 ? fmt4(sell - buy) : "—", "#E8A525"], ["TAX", taxes.exempt ? "EXEMPT" : fmt(taxes.totalTax), "#8B5CF6"]].map(([l, v, c], i) =>
+          React.createElement("div", { key: i }, React.createElement("div", { style: { fontSize: 9, color: "#5A647A", fontWeight: 600, letterSpacing: "0.08em", marginBottom: 2 } }, l), React.createElement("div", { style: { ...monoS, fontSize: 13, fontWeight: 700, color: c } }, v)))),
+      React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 } },
+        React.createElement("button", { onClick: onClose, style: { ...btnS("transparent", "#6B7690"), border: "1px solid #1E2538" } }, "Cancel"),
+        React.createElement("button", { onClick: () => valid && onSave({ id: genId("LD"), ...f, gallons: gal, buyPrice: buy, sellPrice: sell, status: "scheduled", bolNumber: "—" }), style: { ...btnS(valid ? "#E8A525" : "#2A303E", valid ? "#06090F" : "#5A647A"), fontWeight: 700, opacity: valid ? 1 : 0.5 } }, "Create Load"))));
+}
+
+function NewInvModal({ loads, customers, invoices, onClose, onSave }) {
+  const uninv = loads.filter(l => l.status === "delivered" && !invoices.find(i => i.loadId === l.id));
+  const [sel, setSel] = useState("");
+  const load = uninv.find(l => l.id === sel);
+  const cust = load ? customers.find(c => c.id === load.customerId) : null;
+  const taxes = load ? calcTaxes(load.fuelType, load.gallons, load.deliveryState, load.deliveryType) : null;
+  const ft = load ? load.gallons * load.sellPrice : 0;
+  const total = ft + (taxes?.totalTax || 0);
+  const save = () => {
+    if (!load || !cust) return;
+    const li = [{ desc: load.fuelType + " — " + fmtN(load.gallons) + " gal @ " + fmt4(load.sellPrice) + "/gal", amount: ft, type: "fuel" }];
+    if (taxes.totalTax > 0) { li.push({ desc: "Federal Excise (" + fmt4(taxes.federalRate) + "/gal)", amount: taxes.fedTax, type: "fedtax" }); li.push({ desc: (STATE_FUEL_TAX[load.deliveryState]?.name) + " State (" + fmt4(taxes.stateRate) + "/gal)", amount: taxes.stateTax, type: "statetax" }); }
+    if (taxes.exempt) li.push({ desc: "Tax Exempt: " + taxes.exemptReason, amount: 0, type: "exempt" });
+    onSave({ id: genId("INV"), loadId: load.id, customerId: cust.id, customerName: cust.name, date: today(), dueDate: addDays(today(), cust.terms), terms: cust.terms, lineItems: li, subtotal: ft, fedTax: taxes.fedTax, stateTax: taxes.stateTax, totalTax: taxes.totalTax, total, paid: 0, status: "outstanding", deliveryState: load.deliveryState, fuelType: load.fuelType, gallons: load.gallons, taxExempt: taxes.exempt, exemptReason: taxes.exemptReason });
+  };
+  return React.createElement(Overlay, { onClose },
+    React.createElement("div", { style: { width: 560, padding: "24px 26px" } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 16 } },
+        React.createElement("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "#F4F6F9" } }, "Generate Invoice from Load"),
+        React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", cursor: "pointer" } }, React.createElement(Ico, { d: IC.x, size: 16, color: "#5A647A" }))),
+      React.createElement(Field, { label: "Select Delivered Load", value: sel, onChange: setSel, options: uninv.map(l => ({ value: l.id, label: l.id + " — " + customers.find(c => c.id === l.customerId)?.name + " — " + l.fuelType + " " + fmtN(l.gallons) + " gal" })) }),
+      load && cust && React.createElement("div", { style: { marginTop: 14, padding: 16, background: "#080C16", borderRadius: 8, border: "1px solid #1E2538" } },
+        React.createElement("div", { style: { fontWeight: 600, fontSize: 12, color: "#F4F6F9", marginBottom: 10 } }, "Invoice Preview"),
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 } }, React.createElement("span", { style: { color: "#D4DAE3" } }, load.fuelType + " — " + fmtN(load.gallons) + " gal"), React.createElement("span", { style: { ...monoS, color: "#D4DAE3" } }, fmt(ft))),
+        !taxes.exempt && React.createElement("div", null,
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "3px 0 3px 12px", borderLeft: "2px solid #8B5CF644", fontSize: 11 } }, React.createElement("span", { style: { color: "#8E96A8" } }, "Federal Excise"), React.createElement("span", { style: { ...monoS, color: "#8B5CF6" } }, fmt(taxes.fedTax))),
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "3px 0 3px 12px", borderLeft: "2px solid #3B82F644", fontSize: 11 } }, React.createElement("span", { style: { color: "#8E96A8" } }, STATE_FUEL_TAX[load.deliveryState]?.name + " State"), React.createElement("span", { style: { ...monoS, color: "#3B82F6" } }, fmt(taxes.stateTax)))),
+        taxes.exempt && React.createElement("div", { style: { padding: "3px 12px", borderLeft: "2px solid #E8A52544", fontSize: 11, color: "#E8A525" } }, "Exempt: " + taxes.exemptReason),
+        React.createElement("div", { style: { borderTop: "2px solid #E8A52533", marginTop: 8, paddingTop: 8, display: "flex", justifyContent: "space-between" } },
+          React.createElement("span", { style: { fontWeight: 700, fontSize: 13, color: "#F4F6F9" } }, "Total"),
+          React.createElement("span", { style: { ...monoS, fontSize: 15, fontWeight: 700, color: "#E8A525" } }, fmt(total)))),
+      React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 } },
+        React.createElement("button", { onClick: onClose, style: { ...btnS("transparent", "#6B7690"), border: "1px solid #1E2538" } }, "Cancel"),
+        React.createElement("button", { onClick: save, disabled: !load, style: { ...btnS(load ? "#2563EB" : "#2A303E", "#FFF"), fontWeight: 700, opacity: load ? 1 : 0.5 } }, "Generate Invoice"))));
+}
+
+function InvDetailModal({ inv, onClose, onPay }) {
+  const bal = inv.total - inv.paid;
+  return React.createElement(Overlay, { onClose },
+    React.createElement("div", { style: { width: 520, padding: "24px 26px" } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 16 } },
+        React.createElement("div", null, React.createElement("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "#F4F6F9" } }, inv.id), React.createElement("div", { style: { fontSize: 11.5, color: "#5A647A", marginTop: 2 } }, inv.customerName + " · Due " + inv.dueDate)),
+        React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", cursor: "pointer" } }, React.createElement(Ico, { d: IC.x, size: 16, color: "#5A647A" }))),
+      React.createElement("div", { style: { padding: 16, background: "#080C16", borderRadius: 8, border: "1px solid #1E2538" } },
+        inv.lineItems.map((li, i) => React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "5px " + (li.type !== "fuel" ? "12px" : "0"), borderLeft: li.type === "fedtax" ? "2px solid #8B5CF644" : li.type === "statetax" ? "2px solid #3B82F644" : "none", fontSize: 12 } },
+          React.createElement("span", { style: { color: li.type === "exempt" ? "#E8A525" : li.type === "fuel" ? "#D4DAE3" : "#8E96A8" } }, li.desc),
+          li.amount > 0 && React.createElement("span", { style: { ...monoS, color: li.type === "fedtax" ? "#8B5CF6" : li.type === "statetax" ? "#3B82F6" : "#D4DAE3" } }, fmt(li.amount)))),
+        React.createElement("div", { style: { borderTop: "2px solid #E8A52533", marginTop: 8, paddingTop: 8 } },
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } }, React.createElement("span", { style: { fontWeight: 700, color: "#F4F6F9" } }, "Total"), React.createElement("span", { style: { ...monoS, fontSize: 14, fontWeight: 700, color: "#E8A525" } }, fmt(inv.total))),
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } }, React.createElement("span", { style: { fontSize: 12, color: "#10B981" } }, "Paid"), React.createElement("span", { style: { ...monoS, fontSize: 12, color: "#10B981" } }, fmt(inv.paid))),
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } }, React.createElement("span", { style: { fontWeight: 700, color: bal > 0 ? "#E8A525" : "#10B981" } }, "Balance"), React.createElement("span", { style: { ...monoS, fontSize: 14, fontWeight: 700, color: bal > 0 ? "#E8A525" : "#10B981" } }, fmt(bal))))),
+      React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 } },
+        bal > 0 && React.createElement("button", { onClick: onPay, style: { ...btnS("rgba(16,185,129,0.15)", "#10B981"), border: "1px solid rgba(16,185,129,0.3)" } }, "Record Payment"),
+        React.createElement("button", { onClick: onClose, style: { ...btnS("transparent", "#6B7690"), border: "1px solid #1E2538" } }, "Close"))));
+}
+
+function RecPayModal({ inv, onClose, onRecord }) {
+  const bal = inv.total - inv.paid;
+  const [amt, setAmt] = useState(bal.toFixed(2));
+  const [method, setMethod] = useState("ACH");
+  const [ref, setRef] = useState("");
+  return React.createElement(Overlay, { onClose },
+    React.createElement("div", { style: { width: 400, padding: "24px 26px" } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 16 } },
+        React.createElement("div", null, React.createElement("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "#F4F6F9" } }, "Record Payment"), React.createElement("div", { style: { fontSize: 11.5, color: "#5A647A", marginTop: 2 } }, inv.id + " · Balance: " + fmt(bal))),
+        React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", cursor: "pointer" } }, React.createElement(Ico, { d: IC.x, size: 16, color: "#5A647A" }))),
+      React.createElement(Field, { label: "Amount", value: amt, onChange: setAmt, type: "number" }),
+      React.createElement("div", { style: { marginTop: 8 } }, React.createElement(Field, { label: "Method", value: method, onChange: setMethod, options: [{ value: "ACH", label: "ACH" }, { value: "Wire", label: "Wire" }, { value: "Check", label: "Check" }] })),
+      React.createElement("div", { style: { marginTop: 8 } }, React.createElement(Field, { label: "Reference #", value: ref, onChange: setRef, placeholder: "Check #, conf #" })),
+      React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 } },
+        React.createElement("button", { onClick: onClose, style: { ...btnS("transparent", "#6B7690"), border: "1px solid #1E2538" } }, "Cancel"),
+        React.createElement("button", { onClick: () => { onRecord(inv.id, parseFloat(amt), method, ref); onClose(); }, style: { ...btnS("#10B981", "#06090F"), fontWeight: 700 } }, "Record " + fmt(parseFloat(amt) || 0)))));
+}
+
+function LoadDetailModal({ load, customers, suppliers, onClose }) {
+  const cust = customers.find(c => c.id === load.customerId);
+  const sup = suppliers.find(s => s.id === load.supplierId);
+  const taxes = calcTaxes(load.fuelType, load.gallons, load.deliveryState, load.deliveryType);
+  return React.createElement(Overlay, { onClose },
+    React.createElement("div", { style: { width: 500, padding: "24px 26px" } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 14 } },
+        React.createElement("div", null, React.createElement("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "#F4F6F9" } }, "Load " + load.id), React.createElement("div", { style: { marginTop: 4 } }, React.createElement(Badge, { status: load.status }))),
+        React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", cursor: "pointer" } }, React.createElement(Ico, { d: IC.x, size: 16, color: "#5A647A" }))),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 } },
+        [["Customer", cust?.name], ["Supplier", sup?.name], ["Fuel", load.fuelType], ["Gallons", fmtN(load.gallons)], ["Buy", fmt4(load.buyPrice) + "/gal"], ["Sell", fmt4(load.sellPrice) + "/gal"], ["State", load.deliveryState], ["Carrier", load.carrier]].map(([l, v], i) =>
+          React.createElement("div", { key: i }, React.createElement("div", { style: { ...lblS, marginBottom: 1 } }, l), React.createElement("div", { style: { fontSize: 13, color: "#D4DAE3", fontWeight: 500 } }, v)))),
+      React.createElement("div", { style: { padding: 12, background: "#080C16", borderRadius: 8, border: "1px solid #1E2538", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, textAlign: "center" } },
+        [["COST", fmt(load.gallons * load.buyPrice), "#EF4444"], ["REV", fmt(load.gallons * load.sellPrice), "#10B981"], ["MARGIN", fmt(load.gallons * (load.sellPrice - load.buyPrice)), "#E8A525"], ["TAX", taxes.exempt ? "EXEMPT" : fmt(taxes.totalTax), "#8B5CF6"]].map(([l, v, c], i) =>
+          React.createElement("div", { key: i }, React.createElement("div", { style: { fontSize: 9, color: "#5A647A", fontWeight: 600, marginBottom: 2 } }, l), React.createElement("div", { style: { ...monoS, fontSize: 12, fontWeight: 700, color: c } }, v)))),
+      React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } },
+        React.createElement("button", { onClick: onClose, style: { ...btnS("transparent", "#6B7690"), border: "1px solid #1E2538" } }, "Close"))));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════════════════════════
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
