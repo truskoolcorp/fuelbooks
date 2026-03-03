@@ -1,11 +1,8 @@
 "use client";
 import { useState, useRef } from "react";
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// EMAIL / INVOICE INGESTION MODULE v2 — Avila Prime Fuel Brokerage
-// PDF upload → auto-parse → FL tax calc → create AR/AP records w/ PDF attached
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// EMAIL / INVOICE INGESTION MODULE v3 — Avila Prime Fuel Brokerage
+// Fixed parser tuned to actual pdf.js text extraction output
 const fmt = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 const fmt4 = (n) => "$" + Number(n).toFixed(4);
 const fmtN = (n) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(n);
@@ -34,7 +31,7 @@ const IC = {
   dl: ["M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4", "M7 10l5 5 5-5", "M12 15V3"],
 };
 
-// ─── FL FUEL TAX ENGINE (matches Avila Prime actual billing) ────────────────
+// ─── FL FUEL TAX ENGINE ─────────────────────────────────────────────────────
 const FL_FUEL_TAXES = {
   dyed_diesel: { fedLUST: 0.001, fedSuperfund: 0.00429, flPollutant: 0.02071, flSalesTaxRate: 0.06, countyRates: { "Palm Beach": 0.01, "Miami-Dade": 0.01, "Broward": 0.01, "Orange": 0.005, "Hendry": 0.01, "default": 0.01 }, label: "#2 Ultra Low Dyed 15-PPM" },
   clear_diesel: { fedExcise: 0.244, fedLUST: 0.001, flStateTax: 0.17, flLocalOption: 0.12, flInspectionFee: 0.00125, flPollutant: 0.02071, label: "ULSD (Clear On-Road)" },
@@ -48,7 +45,7 @@ function calcFLTaxes(cat, gal, county, price) {
   if (!rates || cat === "dry_run") { const c = +(gal * price).toFixed(2); return { lines: [], envFees: 0, netInvoice: c, salesTax: 0, grandTotal: c, productCost: c }; }
   const productCost = +(gal * price).toFixed(2);
   const lines = []; let envFees = 0;
-  const add = (d, r) => { if (!r) return; const a = +(gal * r).toFixed(2); lines.push({ desc: d, rate: r, amount: a }); envFees += a; };
+  const add = (d, rt) => { if (!rt) return; const a = +(gal * rt).toFixed(2); lines.push({ desc: d, rate: rt, amount: a }); envFees += a; };
   add("Federal Excise Tax", rates.fedExcise); add("FED LUST Tax", rates.fedLUST); add("FED Superfund Recovery Fee", rates.fedSuperfund);
   add("FL Pollutant Tax", rates.flPollutant); add("FL State Fuel Tax", rates.flStateTax); add("FL Local Option Tax", rates.flLocalOption); add("FL Inspection Fee", rates.flInspectionFee);
   envFees = +envFees.toFixed(2);
@@ -58,16 +55,16 @@ function calcFLTaxes(cat, gal, county, price) {
     const cr = rates.countyRates?.[county] ?? rates.countyRates?.["default"] ?? 0;
     const combined = rates.flSalesTaxRate + cr;
     salesTax = +(netInvoice * combined).toFixed(2);
-    lines.push({ desc: `FL Sales Tax (${(rates.flSalesTaxRate*100).toFixed(0)}% + ${(cr*100).toFixed(1)}% county)`, rate: combined, amount: salesTax, isSalesTax: true });
+    lines.push({ desc: "FL Sales Tax (" + (rates.flSalesTaxRate*100).toFixed(0) + "% + " + (cr*100).toFixed(1) + "% county)", rate: combined, amount: salesTax, isSalesTax: true });
   }
   return { lines, envFees, netInvoice, salesTax, grandTotal: +(netInvoice + salesTax).toFixed(2), productCost };
 }
 
-// ─── SMART PARSER ───────────────────────────────────────────────────────────
+// ─── SMART PARSER v3 — handles pdf.js extraction quirks ─────────────────────
 function identifyFuel(text) {
   const l = text.toLowerCase();
   if (l.includes("dry run")) return { type: "dry_run", label: "Dry Run" };
-  if (l.includes("#2 ultra low dyed") || l.includes("dyed 15-ppm") || l.includes("dyed diesel")) return { type: "dyed_diesel", label: "#2 Ultra Low Dyed 15-PPM" };
+  if (l.includes("ultra low dyed") || l.includes("dyed 15-ppm") || l.includes("dyed diesel") || l.includes("#2 ultra low d")) return { type: "dyed_diesel", label: "#2 Ultra Low Dyed 15-PPM" };
   if (l.includes("ulsd") || l.includes("ultra low sulfur") || l.includes("#2 diesel")) return { type: "clear_diesel", label: "ULSD" };
   if (l.includes("premium") || l.includes("93 oct")) return { type: "premium", label: "Premium 93" };
   if (l.includes("regular") || l.includes("unleaded") || l.includes("87") || l.includes("gasoline")) return { type: "gasoline", label: "Regular 87" };
@@ -78,9 +75,45 @@ function identifyFuel(text) {
 function parseDate(s) {
   if (!s) return null;
   let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+  if (m) return m[3] + "-" + m[1].padStart(2,'0') + "-" + m[2].padStart(2,'0');
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   return null;
+}
+
+// Helper: find all dollar amounts in text
+function findAmounts(text) {
+  const amounts = [];
+  const re = /\$?\s?([\d,]+\.\d{2})\b/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (v > 0) amounts.push(v);
+  }
+  return amounts;
+}
+
+// Helper: find all numbers that look like gallons (1000-50000 range, with decimals)
+function findGallons(text) {
+  const re = /([\d,]+\.\d{1,2})\b/g;
+  const candidates = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (v >= 100 && v <= 99999 && m[1].includes(',')) candidates.push(v);
+  }
+  return candidates;
+}
+
+// Helper: find all numbers that look like per-gallon prices ($1-$10 range, 4+ decimals)
+function findUnitPrices(text) {
+  const re = /(\d+\.\d{4,6})\b/g;
+  const candidates = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const v = parseFloat(m[1]);
+    if (v >= 0.5 && v <= 15) candidates.push(v);
+  }
+  return candidates;
 }
 
 function parseInvoicePDF(text, customers, suppliers) {
@@ -101,101 +134,208 @@ function parseInvoicePDF(text, customers, suppliers) {
   if (!text || text.length < 20) { r.warnings.push("Insufficient text"); return r; }
   const lower = text.toLowerCase();
 
-  // ── Classify: who issued this? ─────────────────────────────────────────────
-  const remitAvila = /remit\s*to[\s\S]{0,30}avila/i.test(text) || (/^avila\s*prime/im.test(text) && lower.includes("invoice"));
-  const billToAvila = /bill\s*to[\s\S]{0,80}avila/i.test(text);
-  if (remitAvila && !billToAvila) { r.docType = "customer_invoice"; r.direction = "AR"; }
-  else if (billToAvila) { r.docType = "supplier_bill"; r.direction = "AP"; }
-  else if (lower.includes("please ach or wire payment") && !remitAvila) { r.docType = "supplier_bill"; r.direction = "AP"; }
-  else { r.docType = "supplier_bill"; r.direction = "AP"; r.warnings.push("Defaulting to supplier bill (AP)"); }
+  // ── CLASSIFY: who issued this document? ────────────────────────────────────
+  // pdf.js may output "Ship Via: ... Avila Prime Remit To:" or "Remit To: Avila Prime"
+  // Key insight: if "Remit To" and "Avila Prime" are both present and near each other,
+  // Avila Prime issued this invoice (AR). If "Bill To" references Avila Prime, it's AP.
+  const hasRemitTo = lower.includes("remit to");
+  const hasAvilaPrime = lower.includes("avila prime");
+  const hasBillTo = lower.includes("bill to");
 
-  // ── Invoice # ──────────────────────────────────────────────────────────────
-  for (const p of [/Invoice\s*(?:No|Number|#)[.:]*\s*([A-Z0-9][\w\-]+)/i, /(\d{5,}-IN)/i, /(IN-[\d\-]+)/i]) {
-    const m = text.match(p); if (m) { r.invoiceNumber = m[1].trim(); break; }
+  // Check if Avila Prime is near Remit To (within 120 chars either direction)
+  const remitAvila = hasRemitTo && hasAvilaPrime && (
+    /remit\s*to[\s\S]{0,120}avila\s*prime/i.test(text) ||
+    /avila\s*prime[\s\S]{0,120}remit\s*to/i.test(text)
+  );
+  // Check if Bill To explicitly references Avila Prime
+  const billToAvila = hasBillTo && hasAvilaPrime && /bill\s*to[\s\S]{0,120}avila\s*prime/i.test(text);
+
+  if (remitAvila && !billToAvila) {
+    r.docType = "customer_invoice"; r.direction = "AR";
+  } else if (billToAvila && !remitAvila) {
+    r.docType = "supplier_bill"; r.direction = "AP";
+  } else if (lower.includes("please ach or wire payment") && !remitAvila) {
+    r.docType = "supplier_bill"; r.direction = "AP";
+  } else if (hasAvilaPrime && hasRemitTo) {
+    // If both present and not clearly bill-to, assume AR (Avila Prime issued it)
+    r.docType = "customer_invoice"; r.direction = "AR";
+  } else {
+    r.docType = "supplier_bill"; r.direction = "AP";
+    r.warnings.push("Defaulting to supplier bill (AP)");
   }
 
-  // ── Dates ──────────────────────────────────────────────────────────────────
-  const datePats = {
-    invoiceDate: [/Invoice\s*Date[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i],
-    dueDate: [/(?:Invoice\s*)?Due\s*(?:Date|by)[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i],
-    deliveryDate: [/Delivery\s*Date[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i],
-  };
-  for (const [f, pats] of Object.entries(datePats)) { for (const p of pats) { const m = text.match(p); if (m) { r[f] = parseDate(m[1]); break; } } }
+  // ── INVOICE NUMBER ─────────────────────────────────────────────────────────
+  // Avila Prime format: "0006314-IN" (digits-IN)
+  // Tropic Oil format: "IN-096738-26" (IN-digits)
+  for (const p of [
+    /(\d{5,}-IN)\b/i,                            // 0006314-IN
+    /(IN-[\d\-]+)/i,                              // IN-096738-26
+    /Invoice\s*(?:No|Number|#)[.:]*\s*([A-Z0-9][\w\-]+)/i,  // generic
+  ]) {
+    const m = text.match(p);
+    if (m) { r.invoiceNumber = m[1].trim(); break; }
+  }
 
-  // ── Reference fields ───────────────────────────────────────────────────────
+  // ── DATES ──────────────────────────────────────────────────────────────────
+  // Handle: "Invoice Date" then date, "Invoice Due Date 03/21/2026", "Delivery Date"
+  // pdf.js may put the label and value far apart or adjacent
+  const allDates = [];
+  const dateRe = /(\d{1,2}\/\d{1,2}\/\d{4})/g;
+  let dm;
+  while ((dm = dateRe.exec(text)) !== null) allDates.push({ val: dm[1], idx: dm.index });
+
+  // Try labeled dates first
+  const invDateM = text.match(/Invoice\s*Date[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i);
+  if (invDateM) r.invoiceDate = parseDate(invDateM[1]);
+
+  const dueDateM = text.match(/(?:Invoice\s*)?Due\s*Date[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i);
+  if (dueDateM) r.dueDate = parseDate(dueDateM[1]);
+
+  const delDateM = text.match(/Delivery\s*Date[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i);
+  if (delDateM) r.deliveryDate = parseDate(delDateM[1]);
+
+  // Fallback: if no invoice date found, use first date in document
+  if (!r.invoiceDate && allDates.length > 0) r.invoiceDate = parseDate(allDates[0].val);
+  // If no due date, try to find one after "Due" keyword
+  if (!r.dueDate) {
+    const dueIdx = lower.indexOf("due");
+    if (dueIdx >= 0) {
+      const afterDue = allDates.find(d => d.idx > dueIdx);
+      if (afterDue) r.dueDate = parseDate(afterDue.val);
+    }
+  }
+
+  // ── REFERENCE FIELDS ───────────────────────────────────────────────────────
   const refPats = {
-    poNumber: [/P\.?O\.?\s*(?:No|Number)?[.:]*\s*([\w\-]+)/i, /Customer\s*PO\s*Number\s*([\w\-\s]+?)(?:\s+Terms|\s+Net|\s+Ship)/i],
+    poNumber: [/P\.?O\.?\s*(?:No|Number)?[.:]*\s*([\w\-]+)/i, /Customer\s*PO\s*Number[\s\S]{0,30}?([\w\-]+\s+CONTRACT[\w\s]+?)(?=\s+Net|\s+Terms)/i, /(\d+-\d+\s+CONTRACT\s+\w+)/i],
     orderNumber: [/Order\s*No[.:]*\s*([\w\-]+)/i],
-    referenceNumber: [/Reference\s*No[.:]*\s*([\w\-]+)/i],
     salesOrderNumber: [/Sales\s*Order\s*No[.:]*\s*(\d+)/i],
     accountId: [/Account\s*ID[:\s]*([\w\-]+)/i],
-    customerNumber: [/Customer\s*Number[:\s]*([\w\-]+)/i],
-    salesperson: [/Salesperson[:\s]*([A-Za-z][\w\s]{1,20}?)(?:\s+Carrier|\s*$|\n)/im],
+    customerNumber: [/Customer\s*Number[\s\S]{0,20}?(\d{2}-\d{5,})/i],
+    salesperson: [/Salesperson[:\s]*([A-Za-z][\w\s]{1,20}?)(?:\s+Carrier|\s+Customer|\s*$)/im],
     carrier: [/Carrier[:\s]*([A-Za-z][\w\s]{1,25}?)(?:\s*$|\n)/im],
     bolNumber: [/BOL\s*(?:No)?[.:]*\s*([\w\-]+)/i],
   };
-  for (const [f, pats] of Object.entries(refPats)) { for (const p of pats) { const m = text.match(p); if (m) { r[f] = m[1].trim(); break; } } }
+  for (const [f, pats] of Object.entries(refPats)) {
+    for (const p of pats) {
+      const m = text.match(p);
+      if (m) { r[f] = m[1].trim(); break; }
+    }
+  }
 
-  // ── Parties ────────────────────────────────────────────────────────────────
+  // ── PARTIES ────────────────────────────────────────────────────────────────
   if (r.direction === "AP") {
+    // Supplier bill: vendor is whoever is NOT Avila Prime
     r.billToName = "Avila Prime Professional Services LLC";
     if (lower.includes("tropic oil")) r.vendorName = "Tropic Oil Company";
-    else if (lower.includes("marathon")) r.vendorName = "Marathon Petroleum";
     else if (lower.includes("valero")) r.vendorName = "Valero Energy Corp";
     else if (lower.includes("phillips 66")) r.vendorName = "Phillips 66";
     else if (lower.includes("motiva")) r.vendorName = "Motiva Enterprises";
-    // Ship-to location (delivery site)
-    const stm = text.match(/Ship\s*To[:\s]*(?:ID:\s*\d+\s*)?([\s\S]*?)(?=Avila|Order|Reference|Salesperson|$)/i);
-    if (stm) { const stateM = stm[1].match(/,\s*([A-Z]{2})\s+\d{5}/); if (stateM) r.shipToState = stateM[1]; }
+    else if (lower.includes("marathon petroleum")) r.vendorName = "Marathon Petroleum";
+    // Ship-to for delivery state
+    const stateM = text.match(/(?:South Bay|Miami|Orlando|Tampa|Jacksonville),\s*FL/i);
+    if (stateM) r.shipToState = "FL";
   } else {
+    // Customer invoice (AR): Avila Prime issued it, customer is Ship To
     r.vendorName = "Avila Prime Professional Services LLC";
-    // Customer is in Ship To
-    const stm = text.match(/Ship\s*To[:\s]*(?:\d+\s*)?([\s\S]*?)(?=Customer|Terms|Order|Wrhse|Phone|$)/i);
-    if (stm) {
-      const stLines = stm[1].split('\n').map(l => l.trim()).filter(l => l.length > 3 && !l.match(/^\d{3}-/));
-      r.shipToName = stLines[0]?.replace(/^ID:\s*\d+\s*/, '').trim();
-      const stateM = stm[1].match(/,\s*([A-Z]{2})\s+\d{5}/); if (stateM) r.shipToState = stateM[1];
+    // Look for company names that are NOT Avila Prime
+    if (lower.includes("thalle construction")) { r.shipToName = "Thalle Construction Co., Inc."; r.billToName = r.shipToName; }
+    else if (lower.includes("gulf coast")) { r.shipToName = "Gulf Coast Distributors"; r.billToName = r.shipToName; }
+    else {
+      // Try to find Ship To entity
+      const stm = text.match(/Ship\s*To[:\s]*(?:\d+\s*)?([\s\S]*?)(?=Customer|Terms|Order|Wrhse|Phone|Avila|$)/i);
+      if (stm) {
+        const stLines = stm[1].split(/[\n\s]{2,}/).map(l => l.trim()).filter(l => l.length > 3 && !l.match(/^\d{3}-/) && !l.toLowerCase().includes("avila"));
+        if (stLines[0]) { r.shipToName = stLines[0].replace(/^ID:\s*\d+\s*/, '').trim(); r.billToName = r.shipToName; }
+      }
     }
-    if (!r.shipToName && lower.includes("thalle")) r.shipToName = "Thalle Construction Co., Inc.";
-    // Also check between the header block and Ship To for customer name
-    const custBlock = text.match(/(?:^|\n)([\w\s,.]+(?:CO\.|INC\.|LLC|CORP)[\w\s,.]*)\n/i);
-    if (custBlock && !custBlock[1].toLowerCase().includes("avila")) r.billToName = custBlock[1].trim();
-    else r.billToName = r.shipToName;
+    // Extract state from address
+    const stateM = text.match(/(?:South Bay|Miami|Orlando|Tampa|Jacksonville)[,\s]+([A-Z]{2})\s+\d{5}/i);
+    if (stateM) r.shipToState = stateM[1];
+    else if (lower.includes(", fl ")) r.shipToState = "FL";
   }
 
-  // ── Fuel ───────────────────────────────────────────────────────────────────
+  // ── FUEL TYPE ──────────────────────────────────────────────────────────────
   r.fuelInfo = identifyFuel(text);
   if (r.fuelInfo) r.fuelDescription = r.fuelInfo.label;
 
-  // ── Gallons & Price ────────────────────────────────────────────────────────
-  // Avila Prime format: "GALS 2,232.2 2,232.2 0.0 2.7804 6,206.41"
+  // ── GALLONS, UNIT PRICE, LINE TOTAL ────────────────────────────────────────
+  // pdf.js scrambles table columns. We use multiple strategies:
+
+  // Strategy 1: Standard format "GALS 2,232.2 2,232.2 0.0 2.7804 6,206.41"
   const avilaM = text.match(/GALS?\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+[\d.]+\s+(\d+\.\d{2,6})\s+([\d,]+\.\d{2})/i);
-  if (avilaM) { r.gallons = parseFloat(avilaM[2].replace(/,/g,'')); r.unitPrice = parseFloat(avilaM[3]); r.lineTotal = parseFloat(avilaM[4].replace(/,/g,'')); }
-  // Tropic Oil format: "1.0000 200.000000 200.00"
+  if (avilaM) {
+    r.gallons = parseFloat(avilaM[2].replace(/,/g,''));
+    r.unitPrice = parseFloat(avilaM[3]);
+    r.lineTotal = parseFloat(avilaM[4].replace(/,/g,''));
+  }
+
+  // Strategy 2: pdf.js scrambled "GALS C01 6,206.41 2.7804 2,232.2 2.0 2,232.2"
+  if (!r.gallons) {
+    const scrambledM = text.match(/GALS?\s+\w+\s+([\d,]+\.\d{2})\s+(\d+\.\d{4,6})\s+([\d,]+\.\d{1,2})\s+[\d.]+\s+([\d,]+\.\d{1,2})/i);
+    if (scrambledM) {
+      r.lineTotal = parseFloat(scrambledM[1].replace(/,/g,''));
+      r.unitPrice = parseFloat(scrambledM[2]);
+      r.gallons = parseFloat(scrambledM[3].replace(/,/g,''));
+    }
+  }
+
+  // Strategy 3: Look near GALS keyword for gallon-like and price-like numbers
+  if (!r.gallons) {
+    const galsIdx = lower.indexOf("gals");
+    if (galsIdx >= 0) {
+      const vicinity = text.substring(Math.max(0, galsIdx - 20), galsIdx + 200);
+      const gallonCandidates = findGallons(vicinity);
+      const priceCandidates = findUnitPrices(vicinity);
+      if (gallonCandidates.length > 0) r.gallons = gallonCandidates[0];
+      if (priceCandidates.length > 0) {
+        // Find the price that's NOT part of the total per-gallon (e.g. 2.80640)
+        const unitP = priceCandidates.find(p => p < 5);
+        if (unitP) r.unitPrice = unitP;
+      }
+    }
+  }
+
+  // Strategy 4: Tropic Oil format "1.0000 200.000000 200.00"
   if (!r.gallons) {
     const tropicM = text.match(/([\d,]+\.\d{4})\s+(\d+\.\d{4,8})\s+([\d,]+\.\d{2})/);
-    if (tropicM) { r.gallons = parseFloat(tropicM[1].replace(/,/g,'')); r.unitPrice = parseFloat(tropicM[2]); r.lineTotal = parseFloat(tropicM[3].replace(/,/g,'')); }
+    if (tropicM) {
+      r.gallons = parseFloat(tropicM[1].replace(/,/g,''));
+      r.unitPrice = parseFloat(tropicM[2]);
+      r.lineTotal = parseFloat(tropicM[3].replace(/,/g,''));
+    }
   }
-  if (!r.gallons) { const gm = text.match(/([\d,]+\.?\d*)\s*(?:gal)/i); if (gm) r.gallons = parseFloat(gm[1].replace(/,/g,'')); }
 
-  // ── Extracted tax lines ────────────────────────────────────────────────────
+  // Calculate line total if we have gallons + price
+  if (r.gallons && r.unitPrice && !r.lineTotal) {
+    r.lineTotal = +(r.gallons * r.unitPrice).toFixed(2);
+  }
+
+  // ── EXTRACTED TAX LINES ────────────────────────────────────────────────────
   for (const {p, d} of [
     { p: /FED\s*LUST\s*Tax\s+(\d+\.\d+)\s+([\d,]+\.\d{2})/i, d: "FED LUST Tax" },
     { p: /FED\s*Superfund[\w\s]*\s+(\d+\.\d+)\s+([\d,]+\.\d{2})/i, d: "FED Superfund Recovery Fee" },
     { p: /FL\s*Pollutant\s*Tax\s+(\d+\.\d+)\s+([\d,]+\.\d{2})/i, d: "FL Pollutant Tax" },
-  ]) { const m = text.match(p); if (m) r.extractedTaxLines.push({ desc: d, rate: parseFloat(m[1]), amount: parseFloat(m[2].replace(/,/g,'')) }); }
+  ]) {
+    const m = text.match(p);
+    if (m) r.extractedTaxLines.push({ desc: d, rate: parseFloat(m[1]), amount: parseFloat(m[2].replace(/,/g,'')) });
+  }
 
-  // ── Totals ─────────────────────────────────────────────────────────────────
-  for (const [f, pats] of Object.entries({
-    extractedNetInvoice: [/Net\s*Invoice[:\s]*([\d,]+\.\d{2})/i],
-    extractedSalesTax: [/Sales\s*Tax[:\s]*([\d,]+\.\d{2})/i],
-    invoiceTotal: [/Invoice\s*Total[:\s]*\$?\s*([\d,]+\.\d{2})/i],
-  })) { for (const p of pats) { const m = text.match(p); if (m) { r[f] = parseFloat(m[1].replace(/,/g,'')); break; } } }
+  // ── TOTALS ─────────────────────────────────────────────────────────────────
+  const netM = text.match(/Net\s*Invoice[:\s]*([\d,]+\.\d{2})/i);
+  if (netM) r.extractedNetInvoice = parseFloat(netM[1].replace(/,/g,''));
+
+  const stM = text.match(/Sales\s*Tax[:\s]*([\d,]+\.\d{2})/i);
+  if (stM) r.extractedSalesTax = parseFloat(stM[1].replace(/,/g,''));
+
+  const totalM = text.match(/Invoice\s*Total[:\s]*\$?\s*([\d,]+\.\d{2})/i);
+  if (totalM) r.invoiceTotal = parseFloat(totalM[1].replace(/,/g,''));
 
   // Payment terms
-  const termsM = text.match(/Net\s*(\d+)/i); if (termsM) r.paymentTerms = parseInt(termsM[1]);
+  const termsM = text.match(/Net\s*(\d+)/i);
+  if (termsM) r.paymentTerms = parseInt(termsM[1]);
 
-  // ── Entity matching ────────────────────────────────────────────────────────
+  // ── ENTITY MATCHING ────────────────────────────────────────────────────────
   const searchName = r.direction === "AP" ? r.vendorName : (r.shipToName || r.billToName);
   const entities = r.direction === "AP" ? suppliers : customers;
   if (searchName && entities) {
@@ -210,7 +350,7 @@ function parseInvoicePDF(text, customers, suppliers) {
     if (best && bestS > 10) { r.matchedEntity = best; r.matchConfidence = Math.min(100, bestS); }
   }
 
-  // ── Confidence ─────────────────────────────────────────────────────────────
+  // ── CONFIDENCE ─────────────────────────────────────────────────────────────
   let c = 0;
   if (r.invoiceNumber) c += 10; if (r.invoiceDate) c += 10; if (r.invoiceTotal) c += 20;
   if (r.gallons) c += 15; if (r.unitPrice) c += 10; if (r.fuelInfo) c += 10;
@@ -223,14 +363,14 @@ function parseInvoicePDF(text, customers, suppliers) {
   return r;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 export default function EmailIngestModule({ customers, suppliers, invoices, onCreateInvoice, onCreateBill, onCreateExpense, onToast }) {
   const [subTab, setSubTab] = useState("ingest");
   const [rawText, setRawText] = useState("");
   const [parsed, setParsed] = useState(null);
-  const [ed, setEd] = useState(null); // editData
+  const [ed, setEd] = useState(null);
   const [history, setHistory] = useState([]);
   const [pdfUrl, setPdfUrl] = useState(null);
   const [pdfName, setPdfName] = useState(null);
@@ -244,33 +384,33 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
     if (gal && price) setTaxes(calcFLTaxes(cat, parseFloat(gal), county, parseFloat(price)));
   };
 
-  const initEdit = (r) => {
+  const initEdit = (result) => {
     const e = {
-      direction: r.direction || "AP",
-      entityId: r.matchedEntity?.id || "",
-      entityName: r.matchedEntity?.name || r.vendorName || r.shipToName || "",
-      invoiceNumber: r.invoiceNumber || "",
-      invoiceDate: r.invoiceDate || new Date().toISOString().split("T")[0],
-      dueDate: r.dueDate || "",
-      deliveryDate: r.deliveryDate || "",
-      poNumber: r.poNumber || "",
-      orderNumber: r.orderNumber || "",
-      referenceNumber: r.referenceNumber || "",
-      bolNumber: r.bolNumber || "",
-      salesOrderNumber: r.salesOrderNumber || "",
-      carrier: r.carrier || "",
-      salesperson: r.salesperson || "",
-      fuelCategory: r.fuelInfo?.type || "dyed_diesel",
-      fuelLabel: r.fuelInfo?.label || r.fuelDescription || "",
-      gallons: r.gallons || "",
-      unitPrice: r.unitPrice || "",
-      lineTotal: r.lineTotal || "",
-      shipToState: r.shipToState || "FL",
+      direction: result.direction || "AP",
+      entityId: result.matchedEntity?.id || "",
+      entityName: result.matchedEntity?.name || result.vendorName || result.shipToName || "",
+      invoiceNumber: result.invoiceNumber || "",
+      invoiceDate: result.invoiceDate || new Date().toISOString().split("T")[0],
+      dueDate: result.dueDate || "",
+      deliveryDate: result.deliveryDate || "",
+      poNumber: result.poNumber || "",
+      orderNumber: result.orderNumber || "",
+      referenceNumber: result.referenceNumber || "",
+      bolNumber: result.bolNumber || "",
+      salesOrderNumber: result.salesOrderNumber || "",
+      carrier: result.carrier || "",
+      salesperson: result.salesperson || "",
+      fuelCategory: result.fuelInfo?.type || "dyed_diesel",
+      fuelLabel: result.fuelInfo?.label || result.fuelDescription || "",
+      gallons: result.gallons || "",
+      unitPrice: result.unitPrice || "",
+      lineTotal: result.lineTotal || "",
+      shipToState: result.shipToState || "FL",
       county: "Palm Beach",
-      netInvoice: r.extractedNetInvoice || "",
-      salesTax: r.extractedSalesTax || "",
-      invoiceTotal: r.invoiceTotal || "",
-      paymentTerms: r.paymentTerms || 30,
+      netInvoice: result.extractedNetInvoice || "",
+      salesTax: result.extractedSalesTax || "",
+      invoiceTotal: result.invoiceTotal || "",
+      paymentTerms: result.paymentTerms || 30,
       expenseCategory: "Fuel Purchase (AP)",
       useExtracted: true,
     };
@@ -309,7 +449,7 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
     } catch (err) {
       console.error("PDF extraction error:", err);
       setIsExtracting(false);
-      if (onToast) onToast("PDF extraction failed — try pasting text manually", "error");
+      if (onToast) onToast("PDF extraction failed", "error");
     }
   };
 
@@ -329,29 +469,29 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
       const lt = parseFloat(ed.lineTotal) || gal * price;
       const st = parseFloat(ed.salesTax) || 0;
       const envTax = parsed?.extractedTaxLines?.reduce((s, t) => s + (t.amount||0), 0) || (taxes?.envFees||0);
-      const items = [{ desc: `${ed.fuelLabel||"Fuel"} — ${gal ? fmtN(gal)+" gal" : ""} @ ${price ? fmt4(price)+"/gal" : ""}`, amount: lt, type: "fuel" }];
-      if (parsed?.extractedTaxLines?.length) parsed.extractedTaxLines.forEach(tl => { if (!tl.isSalesTax) items.push({ desc: `${tl.desc} (${fmt4(tl.rate)}/gal)`, amount: tl.amount, type: "envtax" }); });
+      const items = [{ desc: (ed.fuelLabel||"Fuel") + " \u2014 " + (gal ? fmtN(gal)+" gal" : "") + " @ " + (price ? fmt4(price)+"/gal" : ""), amount: lt, type: "fuel" }];
+      if (parsed?.extractedTaxLines?.length) parsed.extractedTaxLines.forEach(tl => { if (!tl.isSalesTax) items.push({ desc: tl.desc + " (" + fmt4(tl.rate) + "/gal)", amount: tl.amount, type: "envtax" }); });
       if (st > 0) items.push({ desc: "FL Sales Tax", amount: st, type: "salestax" });
       onCreateInvoice({ id: record.id, loadId: ed.orderNumber || "INGESTED", customerId: ed.entityId, customerName: ed.entityName, date: ed.invoiceDate, dueDate: ed.dueDate, terms: ed.paymentTerms, lineItems: items, subtotal: lt, fedTax: envTax, stateTax: st, totalTax: envTax + st, total, paid: 0, status: "outstanding", deliveryState: ed.shipToState, fuelType: ed.fuelLabel || "ULSD", gallons: gal, taxExempt: false, pdfUrl, pdfName, sourceInvoiceNumber: ed.invoiceNumber });
     } else if (ed.direction === "AP" && onCreateExpense) {
-      onCreateExpense([{ id: genId("EXP"), date: ed.invoiceDate, category: ed.expenseCategory, vendor: ed.entityName, description: `Inv ${ed.invoiceNumber||"—"} · ${ed.fuelLabel||""} ${ed.gallons ? fmtN(parseFloat(ed.gallons))+" gal" : ""} ${ed.carrier ? "via "+ed.carrier : ""}`.trim(), amount: total, loadId: ed.orderNumber || null, pdfUrl, pdfName, sourceInvoiceNumber: ed.invoiceNumber }]);
+      onCreateExpense([{ id: genId("EXP"), date: ed.invoiceDate, category: ed.expenseCategory, vendor: ed.entityName, description: ("Inv " + (ed.invoiceNumber||"\u2014") + " \u00B7 " + (ed.fuelLabel||"") + " " + (ed.gallons ? fmtN(parseFloat(ed.gallons))+" gal" : "") + " " + (ed.carrier ? "via "+ed.carrier : "")).trim(), amount: total, loadId: ed.orderNumber || null, pdfUrl, pdfName, sourceInvoiceNumber: ed.invoiceNumber }]);
     }
 
     setHistory(prev => [record, ...prev]);
-    if (onToast) onToast(`${ed.direction === "AR" ? "Invoice" : "Bill"} ${record.id} ingested — ${fmt(total)} · PDF attached`, "success");
+    if (onToast) onToast((ed.direction === "AR" ? "Invoice" : "Bill") + " " + record.id + " ingested \u2014 " + fmt(total) + " \u00B7 PDF attached", "success");
     setRawText(""); setParsed(null); setEd(null); setTaxes(null); setPdfUrl(null); setPdfName(null);
   };
 
   const handleDrop = (e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer?.files?.[0]; if (f?.type === "application/pdf") handlePdf(f); };
 
-  // ═════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // RENDER
-  // ═════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <div>
       <div style={{ display: "flex", gap: 5, marginBottom: 16 }}>
-        {[{ id: "ingest", label: "Ingest Invoice / Bill" }, { id: "history", label: `Ingestion History (${history.length})` }].map(st => (
-          <button key={st.id} onClick={() => setSubTab(st.id)} style={{ padding: "5px 14px", borderRadius: 6, border: `1px solid ${subTab === st.id ? "#E8A525" : "#1E2538"}`, background: subTab === st.id ? "rgba(232,165,37,0.1)" : "transparent", color: subTab === st.id ? "#E8A525" : "#6B7690", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{st.label}</button>
+        {[{ id: "ingest", label: "Ingest Invoice / Bill" }, { id: "history", label: "Ingestion History (" + history.length + ")" }].map(st => (
+          <button key={st.id} onClick={() => setSubTab(st.id)} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (subTab === st.id ? "#E8A525" : "#1E2538"), background: subTab === st.id ? "rgba(232,165,37,0.1)" : "transparent", color: subTab === st.id ? "#E8A525" : "#6B7690", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{st.label}</button>
         ))}
       </div>
 
@@ -367,7 +507,7 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
               ) : pdfName ? (
                 <><div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 6 }}><Ico d={IC.chk} size={18} color="#10B981" /><span style={{ fontSize: 14, fontWeight: 600, color: "#10B981" }}>PDF Loaded</span></div><div style={{ ...monoS, fontSize: 12, color: "#D4DAE3" }}>{pdfName}</div><div style={{ fontSize: 11, color: "#5A647A", marginTop: 4 }}>Click or drop to replace</div></>
               ) : (
-                <><Ico d={IC.upload} size={32} color="#2A3348" /><div style={{ fontSize: 14, fontWeight: 600, color: "#6B7690", marginTop: 8 }}>Drop PDF invoice or bill here</div><div style={{ fontSize: 11.5, color: "#3D4659", marginTop: 3 }}>Supports supplier bills (Tropic Oil, etc.) & customer invoices (Avila Prime → customer)</div></>
+                <><Ico d={IC.upload} size={32} color="#2A3348" /><div style={{ fontSize: 14, fontWeight: 600, color: "#6B7690", marginTop: 8 }}>Drop PDF invoice or bill here</div><div style={{ fontSize: 11.5, color: "#3D4659", marginTop: 3 }}>Supports supplier bills &amp; customer invoices</div></>
               )}
             </div>
             <div style={cardS}>
@@ -382,7 +522,7 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
               <div style={cardS}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <div style={{ fontWeight: 700, fontSize: 12, color: "#F4F6F9", display: "flex", alignItems: "center", gap: 6 }}><Ico d={IC.clip} size={14} color="#E8A525" /> Attached PDF Preview</div>
-                  <a href={pdfUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#3B82F6", textDecoration: "none" }}>Open ↗</a>
+                  <a href={pdfUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#3B82F6", textDecoration: "none" }}>Open in tab</a>
                 </div>
                 <iframe src={pdfUrl} style={{ width: "100%", height: 300, border: "1px solid #1E2538", borderRadius: 6, background: "#FFF" }} title="PDF Preview" />
               </div>
@@ -395,7 +535,7 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
               <div style={{ ...cardS, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 320, textAlign: "center" }}>
                 <Ico d={IC.pdf} size={44} color="#1E2538" />
                 <div style={{ fontSize: 14, color: "#3D4659", marginTop: 14, fontWeight: 600 }}>Upload a PDF or paste invoice text</div>
-                <div style={{ fontSize: 12, color: "#2A303E", marginTop: 4, maxWidth: 280, lineHeight: 1.5 }}>Auto-detects supplier bills vs customer invoices, extracts all data, calculates FL fuel taxes, and attaches the original PDF.</div>
+                <div style={{ fontSize: 12, color: "#2A303E", marginTop: 4, maxWidth: 280, lineHeight: 1.5 }}>Auto-detects supplier bills vs customer invoices. FL fuel taxes auto-calculated.</div>
               </div>
             )}
 
@@ -415,21 +555,21 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
 
               {/* Editable fields */}
               <div style={cardS}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#F4F6F9", marginBottom: 14 }}>Extracted Data — Review & Confirm</div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#F4F6F9", marginBottom: 14 }}>Extracted Data</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div>
                     <label style={{ display: "block", ...lblS, marginBottom: 4 }}>Document Type</label>
                     <div style={{ display: "flex", gap: 5 }}>
                       {[["AP", "Supplier Bill (AP)"], ["AR", "Customer Invoice (AR)"]].map(([dir, label]) => (
-                        <button key={dir} onClick={() => setEd(p => ({ ...p, direction: dir }))} style={{ flex: 1, padding: "6px", borderRadius: 5, border: `1px solid ${ed.direction === dir ? (dir === "AP" ? "#EF4444" : "#10B981") : "#1E2538"}`, background: ed.direction === dir ? (dir === "AP" ? "rgba(239,68,68,0.08)" : "rgba(16,185,129,0.08)") : "transparent", color: ed.direction === dir ? (dir === "AP" ? "#EF4444" : "#10B981") : "#5A647A", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{label}</button>
+                        <button key={dir} onClick={() => setEd(p => ({ ...p, direction: dir }))} style={{ flex: 1, padding: "6px", borderRadius: 5, border: "1px solid " + (ed.direction === dir ? (dir === "AP" ? "#EF4444" : "#10B981") : "#1E2538"), background: ed.direction === dir ? (dir === "AP" ? "rgba(239,68,68,0.08)" : "rgba(16,185,129,0.08)") : "transparent", color: ed.direction === dir ? (dir === "AP" ? "#EF4444" : "#10B981") : "#5A647A", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{label}</button>
                       ))}
                     </div>
                   </div>
                   <div>
-                    <label style={{ display: "block", ...lblS, marginBottom: 4 }}>{ed.direction === "AP" ? "Supplier" : "Customer"}{parsed.matchConfidence > 0 && <span style={{ color: "#10B981", marginLeft: 4, fontSize: 10 }}>✓ matched</span>}</label>
+                    <label style={{ display: "block", ...lblS, marginBottom: 4 }}>{ed.direction === "AP" ? "Supplier" : "Customer"}{parsed.matchConfidence > 0 && <span style={{ color: "#10B981", marginLeft: 4, fontSize: 10 }}>matched</span>}</label>
                     <select value={ed.entityId} onChange={e => { const ents = ed.direction === "AP" ? suppliers : customers; const ent = ents.find(x => x.id === e.target.value); setEd(p => ({ ...p, entityId: e.target.value, entityName: ent?.name || p.entityName })); }} style={{ ...inputS, appearance: "auto" }}>
-                      <option value="">— Select —</option>
-                      {(ed.direction === "AP" ? suppliers : customers).map(e => <option key={e.id} value={e.id}>{e.name}{e.id === parsed.matchedEntity?.id ? " ✓" : ""}</option>)}
+                      <option value="">Select or type</option>
+                      {(ed.direction === "AP" ? suppliers : customers).map(e => <option key={e.id} value={e.id}>{e.name}{e.id === parsed.matchedEntity?.id ? " \u2713" : ""}</option>)}
                     </select>
                     {!ed.entityId && ed.entityName && <div style={{ fontSize: 10, color: "#E8A525", marginTop: 3 }}>Detected: {ed.entityName}</div>}
                   </div>
@@ -442,7 +582,7 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
 
               {/* Product & Pricing */}
               <div style={cardS}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#F4F6F9", marginBottom: 14 }}>Product & Pricing</div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#F4F6F9", marginBottom: 14 }}>Product &amp; Pricing</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
                   <div><label style={{ display: "block", ...lblS, marginBottom: 4 }}>Fuel Type</label>
                     <select value={ed.fuelCategory} onChange={e => { setEd(p => ({ ...p, fuelCategory: e.target.value, fuelLabel: FL_FUEL_TAXES[e.target.value]?.label || "" })); doRecalc(e.target.value, ed.gallons, ed.county, ed.unitPrice); }} style={{ ...inputS, appearance: "auto" }}>
@@ -467,17 +607,17 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
                 </div>
               </div>
 
-              {/* Tax Comparison: Extracted vs Calculated */}
+              {/* Tax Comparison */}
               <div style={cardS}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: "#F4F6F9" }}>Tax Breakdown</div>
                   <div style={{ display: "flex", gap: 5 }}>
-                    <button onClick={() => setEd(p => ({ ...p, useExtracted: true }))} style={{ padding: "3px 10px", borderRadius: 4, border: `1px solid ${ed.useExtracted ? "#E8A525" : "#1E2538"}`, background: ed.useExtracted ? "#E8A52515" : "transparent", color: ed.useExtracted ? "#E8A525" : "#5A647A", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Use PDF Values</button>
-                    <button onClick={() => setEd(p => ({ ...p, useExtracted: false }))} style={{ padding: "3px 10px", borderRadius: 4, border: `1px solid ${!ed.useExtracted ? "#3B82F6" : "#1E2538"}`, background: !ed.useExtracted ? "#3B82F615" : "transparent", color: !ed.useExtracted ? "#3B82F6" : "#5A647A", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Use Calculated</button>
+                    <button onClick={() => setEd(p => ({ ...p, useExtracted: true }))} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid " + (ed.useExtracted ? "#E8A525" : "#1E2538"), background: ed.useExtracted ? "#E8A52515" : "transparent", color: ed.useExtracted ? "#E8A525" : "#5A647A", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Use PDF Values</button>
+                    <button onClick={() => setEd(p => ({ ...p, useExtracted: false }))} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid " + (!ed.useExtracted ? "#3B82F6" : "#1E2538"), background: !ed.useExtracted ? "#3B82F615" : "transparent", color: !ed.useExtracted ? "#3B82F6" : "#5A647A", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Use Calculated</button>
                   </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                  <div style={{ padding: 12, background: "#080C16", borderRadius: 8, border: `1px solid ${ed.useExtracted ? "#E8A52544" : "#1E2538"}` }}>
+                  <div style={{ padding: 12, background: "#080C16", borderRadius: 8, border: "1px solid " + (ed.useExtracted ? "#E8A52544" : "#1E2538") }}>
                     <div style={{ fontSize: 10, color: "#E8A525", fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8, textTransform: "uppercase" }}>Extracted from PDF</div>
                     {parsed.extractedTaxLines.length > 0 ? parsed.extractedTaxLines.map((tl, i) => (
                       <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: 11.5 }}>
@@ -488,20 +628,20 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
                     {parsed.extractedSalesTax > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0 3px", fontSize: 11.5, borderTop: "1px solid #1E2538", marginTop: 4 }}><span style={{ color: "#8B5CF6" }}>Sales Tax</span><span style={{ ...monoS, color: "#8B5CF6", fontWeight: 600 }}>{fmt(parsed.extractedSalesTax)}</span></div>}
                     {parsed.extractedNetInvoice && <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0 3px", fontSize: 11.5, borderTop: "1px solid #1E2538", marginTop: 4 }}><span style={{ color: "#6B7690" }}>Net Invoice</span><span style={{ ...monoS, color: "#D4DAE3", fontWeight: 600 }}>{fmt(parsed.extractedNetInvoice)}</span></div>}
                   </div>
-                  <div style={{ padding: 12, background: "#080C16", borderRadius: 8, border: `1px solid ${!ed.useExtracted ? "#3B82F644" : "#1E2538"}` }}>
+                  <div style={{ padding: 12, background: "#080C16", borderRadius: 8, border: "1px solid " + (!ed.useExtracted ? "#3B82F644" : "#1E2538") }}>
                     <div style={{ fontSize: 10, color: "#3B82F6", fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8, textTransform: "uppercase" }}>Auto-Calculated (FL Engine)</div>
                     {taxes?.lines?.map((tl, i) => (
                       <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: 11.5 }}>
                         <span style={{ color: "#8E96A8" }}>{tl.desc}</span>
                         <span style={{ ...monoS, color: tl.isSalesTax ? "#8B5CF6" : "#D4DAE3", fontWeight: 500 }}>{fmt(tl.amount)}</span>
                       </div>
-                    )) || <div style={{ fontSize: 11, color: "#3D4659" }}>Enter gallons & price to calculate</div>}
+                    )) || <div style={{ fontSize: 11, color: "#3D4659" }}>Enter gallons &amp; price to calculate</div>}
                     {taxes && <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0 3px", fontSize: 11.5, borderTop: "1px solid #1E2538", marginTop: 4 }}><span style={{ color: "#6B7690" }}>Calculated Total</span><span style={{ ...monoS, color: "#E8A525", fontWeight: 700 }}>{fmt(taxes.grandTotal)}</span></div>}
                   </div>
                 </div>
               </div>
 
-              {/* Final totals + create */}
+              {/* Totals + Create */}
               <div style={cardS}>
                 <div style={{ fontWeight: 700, fontSize: 13, color: "#F4F6F9", marginBottom: 14 }}>Invoice Total</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
@@ -513,8 +653,8 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
                 <button onClick={createRecord} disabled={!ed.invoiceTotal} style={{ ...btnS(ed.invoiceTotal ? (ed.direction === "AP" ? "#EF4444" : "#10B981") : "#2A303E", "#FFF"), marginTop: 16, fontWeight: 700, width: "100%", padding: "12px", fontSize: 13, opacity: ed.invoiceTotal ? 1 : 0.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                   <Ico d={IC.chk} size={16} color="#FFF" />
                   {ed.direction === "AP" ? "Create Supplier Bill (AP)" : "Create Customer Invoice (AR)"}
-                  {ed.invoiceTotal ? ` — ${fmt(parseFloat(ed.invoiceTotal))}` : ""}
-                  {pdfName ? " · PDF Attached" : ""}
+                  {ed.invoiceTotal ? " \u2014 " + fmt(parseFloat(ed.invoiceTotal)) : ""}
+                  {pdfName ? " \u00B7 PDF Attached" : ""}
                 </button>
               </div>
             </>)}
@@ -522,7 +662,7 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
         </div>
       )}
 
-      {/* ── HISTORY ──────────────────────────────────────────────────────────── */}
+      {/* HISTORY */}
       {subTab === "history" && (
         history.length === 0 ? (
           <div style={{ ...cardS, padding: 50, textAlign: "center" }}><Ico d={IC.mail} size={36} color="#1E2538" /><div style={{ fontSize: 14, color: "#3D4659", marginTop: 12, fontWeight: 600 }}>No ingested records yet</div></div>
@@ -530,19 +670,19 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
           <div style={{ ...cardS, padding: 0, overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
               <thead><tr style={{ background: "#080C16" }}>{["ID", "Type", "Entity", "Invoice #", "Fuel", "Gallons", "Unit $", "Total", "Date", "PDF", ""].map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
-              <tbody>{history.map(r => (
-                <tr key={r.id}>
-                  <td style={{ ...tdS, ...monoS, color: "#E8A525", fontSize: 10.5 }}>{r.id}</td>
-                  <td style={tdS}><span style={{ background: r.direction === "AP" ? "#5C1010" : "#064E3B", color: r.direction === "AP" ? "#EF4444" : "#10B981", padding: "2px 7px", borderRadius: 3, fontSize: 9.5, fontWeight: 700 }}>{r.direction}</span></td>
-                  <td style={{ ...tdS, color: "#D4DAE3", fontWeight: 500 }}>{r.entityName||"—"}</td>
-                  <td style={{ ...tdS, ...monoS, fontSize: 10.5, color: "#6B7690" }}>{r.invoiceNumber||"—"}</td>
-                  <td style={tdS}>{r.fuelLabel ? <span style={{ background: "#131A29", padding: "1px 6px", borderRadius: 3, fontSize: 10 }}>{r.fuelLabel}</span> : "—"}</td>
-                  <td style={{ ...tdS, ...monoS, fontSize: 11, color: "#D4DAE3" }}>{r.gallons ? fmtN(parseFloat(r.gallons)) : "—"}</td>
-                  <td style={{ ...tdS, ...monoS, fontSize: 11, color: "#6B7690" }}>{r.unitPrice ? fmt4(parseFloat(r.unitPrice)) : "—"}</td>
-                  <td style={{ ...tdS, ...monoS, fontSize: 12, fontWeight: 600, color: r.direction === "AP" ? "#EF4444" : "#10B981" }}>{fmt(parseFloat(r.invoiceTotal))}</td>
-                  <td style={{ ...tdS, color: "#6B7690" }}>{r.invoiceDate}</td>
-                  <td style={tdS}>{r.pdfUrl ? <button onClick={() => setViewPdf(r)} style={{ background: "rgba(232,165,37,0.1)", border: "none", borderRadius: 4, padding: "3px 8px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}><Ico d={IC.clip} size={11} color="#E8A525" /><span style={{ fontSize: 10, color: "#E8A525", fontWeight: 600 }}>PDF</span></button> : "—"}</td>
-                  <td style={tdS}><button onClick={() => setViewPdf(r)} style={{ background: "rgba(59,130,246,0.1)", border: "none", borderRadius: 4, padding: "3px 8px", cursor: "pointer" }}><Ico d={IC.eye} size={12} color="#3B82F6" /></button></td>
+              <tbody>{history.map(rec => (
+                <tr key={rec.id}>
+                  <td style={{ ...tdS, ...monoS, color: "#E8A525", fontSize: 10.5 }}>{rec.id}</td>
+                  <td style={tdS}><span style={{ background: rec.direction === "AP" ? "#5C1010" : "#064E3B", color: rec.direction === "AP" ? "#EF4444" : "#10B981", padding: "2px 7px", borderRadius: 3, fontSize: 9.5, fontWeight: 700 }}>{rec.direction}</span></td>
+                  <td style={{ ...tdS, color: "#D4DAE3", fontWeight: 500 }}>{rec.entityName||"\u2014"}</td>
+                  <td style={{ ...tdS, ...monoS, fontSize: 10.5, color: "#6B7690" }}>{rec.invoiceNumber||"\u2014"}</td>
+                  <td style={tdS}>{rec.fuelLabel ? <span style={{ background: "#131A29", padding: "1px 6px", borderRadius: 3, fontSize: 10 }}>{rec.fuelLabel}</span> : "\u2014"}</td>
+                  <td style={{ ...tdS, ...monoS, fontSize: 11, color: "#D4DAE3" }}>{rec.gallons ? fmtN(parseFloat(rec.gallons)) : "\u2014"}</td>
+                  <td style={{ ...tdS, ...monoS, fontSize: 11, color: "#6B7690" }}>{rec.unitPrice ? fmt4(parseFloat(rec.unitPrice)) : "\u2014"}</td>
+                  <td style={{ ...tdS, ...monoS, fontSize: 12, fontWeight: 600, color: rec.direction === "AP" ? "#EF4444" : "#10B981" }}>{fmt(parseFloat(rec.invoiceTotal))}</td>
+                  <td style={{ ...tdS, color: "#6B7690" }}>{rec.invoiceDate}</td>
+                  <td style={tdS}>{rec.pdfUrl ? <button onClick={() => setViewPdf(rec)} style={{ background: "rgba(232,165,37,0.1)", border: "none", borderRadius: 4, padding: "3px 8px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}><Ico d={IC.clip} size={11} color="#E8A525" /><span style={{ fontSize: 10, color: "#E8A525", fontWeight: 600 }}>PDF</span></button> : "\u2014"}</td>
+                  <td style={tdS}><button onClick={() => setViewPdf(rec)} style={{ background: "rgba(59,130,246,0.1)", border: "none", borderRadius: 4, padding: "3px 8px", cursor: "pointer" }}><Ico d={IC.eye} size={12} color="#3B82F6" /></button></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -550,14 +690,14 @@ export default function EmailIngestModule({ customers, suppliers, invoices, onCr
         )
       )}
 
-      {/* PDF Viewer Modal */}
+      {/* PDF Modal */}
       {viewPdf && (
         <div onClick={() => setViewPdf(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(6px)" }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#0D1320", borderRadius: 14, border: "1px solid #1E2538", width: 720, maxHeight: "90vh", overflow: "auto", padding: "20px 24px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 15, color: "#F4F6F9" }}>{viewPdf.id}</div>
-                <div style={{ fontSize: 12, color: "#5A647A", marginTop: 2 }}><span style={{ color: viewPdf.direction === "AP" ? "#EF4444" : "#10B981", fontWeight: 600 }}>{viewPdf.direction}</span>{" · "}{viewPdf.entityName} · {viewPdf.invoiceNumber} · {fmt(parseFloat(viewPdf.invoiceTotal))}</div>
+                <div style={{ fontSize: 12, color: "#5A647A", marginTop: 2 }}><span style={{ color: viewPdf.direction === "AP" ? "#EF4444" : "#10B981", fontWeight: 600 }}>{viewPdf.direction}</span>{" \u00B7 "}{viewPdf.entityName} {" \u00B7 "} {viewPdf.invoiceNumber} {" \u00B7 "} {fmt(parseFloat(viewPdf.invoiceTotal))}</div>
               </div>
               <button onClick={() => setViewPdf(null)} style={{ background: "none", border: "none", cursor: "pointer" }}><Ico d={IC.x} size={18} color="#5A647A" /></button>
             </div>
