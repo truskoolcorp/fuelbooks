@@ -190,6 +190,16 @@ function parseInvoicePDF(text, customers, suppliers) {
 
   const dueDateM = text.match(/(?:Invoice\s*)?Due\s*Date[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i);
   if (dueDateM) r.dueDate = parseDate(dueDateM[1]);
+  // pdf.js may put date BEFORE the label: "03/21/2026 Invoice Due Date"
+  if (!r.dueDate) {
+    const dueDateM2 = text.match(/(\d{1,2}\/\d{1,2}\/\d{4})\s+(?:Invoice\s*)?Due\s*Date/i);
+    if (dueDateM2) r.dueDate = parseDate(dueDateM2[1]);
+  }
+  // Tropic Oil: "Due by Sat 03/21/2026"
+  if (!r.dueDate) {
+    const dueDateM3 = text.match(/Due\s*by\s+\w+\s+(\d{1,2}\/\d{1,2}\/\d{4})/i);
+    if (dueDateM3) r.dueDate = parseDate(dueDateM3[1]);
+  }
 
   const delDateM = text.match(/Delivery\s*Date[:\s]*(?:\w{3}\s+)?(\d{1,2}\/\d{1,2}\/\d{4})/i);
   if (delDateM) r.deliveryDate = parseDate(delDateM[1]);
@@ -205,21 +215,62 @@ function parseInvoicePDF(text, customers, suppliers) {
     }
   }
 
-  // ── REFERENCE FIELDS ───────────────────────────────────────────────────────
-  const refPats = {
-    poNumber: [/P\.O\.\s*No[.:]*\s*(TF[\w]+)/i, /Customer\s*PO\s*Number[\s\S]{0,30}?([\w\-]+\s+CONTRACT[\w\s]+?)(?=\s+Net|\s+Terms)/i, /(\d+-\d+\s+CONTRACT\s+\w+)/i, /P\.?O\.?\s*(?:No|Number)?[.:]*\s*(?!Box)([\w\-]{5,})/i],
-    orderNumber: [/Order\s*No[.:]*\s*(ON-[\w\-]+)/i, /Order\s*No[.:]*\s*([\w\-]+)/i],
-    salesOrderNumber: [/Sales\s*Order\s*No[.:]*\s*(\d+)/i],
-    accountId: [/Account\s*ID[:\s]*([\w\-]+)/i],
-    customerNumber: [/Customer\s*Number[\s\S]{0,20}?(\d{2}-\d{5,})/i],
-    salesperson: [/Salesperson[:\s]*(HOUSE)/i, /Salesperson[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)/m, /Salesperson[:\s]*([A-Za-z][\w\s]{1,20}?)(?:\s+Carrier|\s+Customer|\s*$)/im],
-    carrier: [/Carrier[:\s]+(Tropic\s+Transportation)/i, /Carrier[:\s]*([A-Za-z][\w\s]{1,25}?)(?:\s*$|\n)/im],
-    bolNumber: [/BOL\s*(?:No)?[.:]*\s*([\w\-]+)/i],
-  };
-  for (const [f, pats] of Object.entries(refPats)) {
-    for (const p of pats) {
-      const m = text.match(p);
-      if (m) { r[f] = m[1].trim(); break; }
+  // ── REFERENCE FIELDS (format-specific to handle pdf.js text scrambling) ────
+  // pdf.js concatenates table cells out of order, so generic "Label: Value" fails.
+  // We detect the invoice format first, then use targeted extraction.
+
+  const isTropicOil = lower.includes("tropic oil");
+  const isAvilaPrime = lower.includes("avila prime") && (lower.includes("remit to") || lower.includes("invoice number"));
+
+  if (isTropicOil) {
+    // Tropic Oil pdf.js outputs: "Reference No.: P.O. No: Salesperson: TFDD... TFPO... Bo Waymack Carrier: Tropic Transportation ON-536735-26 Order No: Ship To:"
+    // Labels are grouped, then values follow in same order
+    const tfRef = text.match(/(TFDD[\w\-]+)/i); if (tfRef) r.referenceNumber = tfRef[1];
+    const tfPO = text.match(/(TFPO[\w]+)/i); if (tfPO) r.poNumber = tfPO[1];
+    const onOrder = text.match(/(ON-[\w\-]+)/i); if (onOrder) r.orderNumber = onOrder[1];
+    // Salesperson appears between TFPO and "Carrier:"
+    const spM = text.match(/TFPO\w+\s+([A-Z][a-z]+\s+[A-Z][a-z]+)\s+Carrier/);
+    if (spM) r.salesperson = spM[1];
+    else { const spM2 = text.match(/Salesperson[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)/); if (spM2) r.salesperson = spM2[1]; }
+    // Carrier
+    const crM = text.match(/Carrier[:\s]+(Tropic\s+Transportation)/i); if (crM) r.carrier = crM[1];
+    // Account ID
+    const acctM = text.match(/Account\s*ID[:\s]*(F\d+)/i); if (acctM) r.accountId = acctM[1];
+  } else if (isAvilaPrime) {
+    // Avila Prime pdf.js outputs: "24-405 CONTRACT 11B Net 30 0006314 2/20/2026 ... Sales Order No. Order Date Salesperson Customer Number HOUSE"
+    // PO is the CONTRACT reference before "Net 30"
+    const poM = text.match(/([\d\-]+\s+CONTRACT\s+\w+)/i); if (poM) r.poNumber = poM[1];
+    // Sales Order No: appears as a number near "Sales Order No"
+    const soIdx = lower.indexOf("sales order no");
+    if (soIdx >= 0) {
+      // Look backwards from "Sales Order No" for a standalone number like 0006314
+      const before = text.substring(Math.max(0, soIdx - 60), soIdx);
+      const soM = before.match(/\b(000\d{4})\b/); if (soM) r.salesOrderNumber = soM[1];
+    }
+    // Salesperson: HOUSE appears after "Salesperson" and "Customer Number" labels
+    if (lower.includes("house")) {
+      const houseM = text.match(/\bHOUSE\b/); if (houseM) r.salesperson = "HOUSE";
+    }
+    // Customer Number: 03-0000087
+    const cnM = text.match(/(\d{2}-\d{5,})/); if (cnM) r.customerNumber = cnM[1];
+    // Order # for Avila Prime = Sales Order No (0006328 from "Ship Via: 0006328")
+    const shipViaM = text.match(/(?:Ship\s*Via|0006\d{3})\D*(0006\d{3})/); 
+    if (shipViaM) r.orderNumber = shipViaM[1];
+    else { const soNum = text.match(/\b(0006\d{3})\b/g); if (soNum && soNum.length > 0) r.orderNumber = soNum[soNum.length > 1 ? 1 : 0]; }
+  } else {
+    // Generic fallback for unknown formats
+    const genPats = {
+      poNumber: [/P\.O\.\s*No[.:]*\s*([\w\-]{5,})/i, /P\.?O\.?\s*(?:No|Number)?[.:]*\s*(?!Box)([\w\-]{5,})/i],
+      orderNumber: [/Order\s*No[.:]*\s*([\w\-]+)/i],
+      salesperson: [/Salesperson[:\s]+([A-Za-z][\w\s]{1,20}?)(?:\s+Carrier|\s+Customer|\s*$)/im],
+      carrier: [/Carrier[:\s]*([A-Za-z][\w\s]{1,25}?)(?:\s*$|\n)/im],
+      bolNumber: [/BOL\s*(?:No)?[.:]*\s*([\w\-]+)/i],
+      accountId: [/Account\s*ID[:\s]*([\w\-]+)/i],
+    };
+    for (const [f, pats] of Object.entries(genPats)) {
+      for (const p of pats) {
+        const m = text.match(p); if (m) { r[f] = m[1].trim(); break; }
+      }
     }
   }
 
@@ -337,16 +388,40 @@ function parseInvoicePDF(text, customers, suppliers) {
   const stM = text.match(/Sales\s*Tax[:\s]*([\d,]+\.\d{2})/i);
   if (stM) r.extractedSalesTax = parseFloat(stM[1].replace(/,/g,''));
 
-  // Invoice Total: pdf.js may insert garbage between label and amount
-  // Tropic Oil: "Invoice Total ****Payment Terms Summary**** $200.00"
-  // Avila Prime: "Invoice Total: 6,661.83"
-  for (const tp of [
-    /Invoice\s*Total[:\s]*\$?\s*([\d,]+\.\d{2})/i,
-    /Invoice\s*Total[\s\S]{0,80}?\$\s*([\d,]+\.\d{2})/i,
-    /Invoice\s*Total[\s\S]{0,80}?([\d,]+\.\d{2})\s/i,
-  ]) {
-    const totalM = text.match(tp);
-    if (totalM) { r.invoiceTotal = parseFloat(totalM[1].replace(/,/g,'')); break; }
+  // Invoice Total: pdf.js may separate label from value in two-column layouts
+  // Strategy 1: Direct match "Invoice Total: 6,661.83" or "Invoice Total $200.00"
+  const itM1 = text.match(/Invoice\s*Total[:\s]*\$?\s*([\d,]+\.\d{2})/i);
+  if (itM1) r.invoiceTotal = parseFloat(itM1[1].replace(/,/g,''));
+  // Strategy 2: With junk between (Tropic Oil: "Invoice Total ****....**** $200.00")
+  if (!r.invoiceTotal) {
+    const itM2 = text.match(/Invoice\s*Total[\s\S]{0,120}?\$([\d,]+\.\d{2})/i);
+    if (itM2) r.invoiceTotal = parseFloat(itM2[1].replace(/,/g,''));
+  }
+  // Strategy 3: Find "Invoice Total" position, then scan for amounts nearby
+  if (!r.invoiceTotal) {
+    const itIdx = lower.indexOf("invoice total");
+    if (itIdx >= 0) {
+      const after = text.substring(itIdx, itIdx + 200);
+      const amounts = [];
+      const re = /([\d,]+\.\d{2})/g; let am;
+      while ((am = re.exec(after)) !== null) {
+        const v = parseFloat(am[1].replace(/,/g,''));
+        if (v > 0) amounts.push(v);
+      }
+      // Pick the amount that's >= lineTotal (invoice total should be >= product cost)
+      const lt = r.lineTotal || 0;
+      const valid = amounts.filter(a => a >= lt * 0.95);
+      if (valid.length > 0) r.invoiceTotal = valid[0];
+      else if (amounts.length > 0) r.invoiceTotal = Math.max(...amounts);
+    }
+  }
+  // Strategy 4: Net Invoice + Sales Tax = Total
+  if (!r.invoiceTotal && r.extractedNetInvoice) {
+    r.invoiceTotal = +(r.extractedNetInvoice + (r.extractedSalesTax || 0)).toFixed(2);
+  }
+  // Strategy 5: Dry run — total = lineTotal
+  if (!r.invoiceTotal && r.lineTotal && r.fuelInfo?.type === "dry_run") {
+    r.invoiceTotal = r.lineTotal;
   }
 
   // Payment terms
