@@ -283,10 +283,10 @@ export default function FuelBooksApp() {
       {/* SIDEBAR */}
       <aside style={{ width: 232, background: "#0A0F1A", borderRight: "1px solid #161D2E", display: "flex", flexDirection: "column", flexShrink: 0 }}>
         <div style={{ padding: "18px 18px 16px", borderBottom: "1px solid #161D2E", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 8, background: "linear-gradient(135deg, #E8A525, #C67D12)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, color: "#06090F" }}>FB</div>
+          <img src="/fuelbooks-mark.svg" alt="FuelBooks by Tru Skool" width="38" height="38" style={{ flexShrink: 0 }} />
           <div>
-            <div style={{ fontWeight: 700, fontSize: 14, color: "#F4F6F9", letterSpacing: "-0.03em" }}>FuelBooks Pro</div>
-            <div style={{ fontSize: 9, color: "#5A647A", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Brokerage Accounting</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#F4F6F9", letterSpacing: "-0.03em" }}>FuelBooks</div>
+            <div style={{ fontSize: 9, color: "#75D62A", fontWeight: 500, letterSpacing: "0.01em" }}>AP Fuel USA · by Tru Skool</div>
           </div>
         </div>
         <nav style={{ flex: 1, padding: "10px 8px", display: "flex", flexDirection: "column", gap: 1, overflowY: "auto" }}>
