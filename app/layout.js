@@ -1,6 +1,7 @@
 export const metadata = {
-  title: "FuelBooks Pro — Fuel Brokerage Accounting",
-  description: "Full-featured accounting platform for fuel brokerages with invoicing, P&L, and tax engine",
+  title: "FuelBooks — AP Fuel USA | by Tru Skool",
+  description: "Fuel brokerage operations and accounting for AP Fuel USA, built by Tru Skool Entertainment International Corp.",
+  icons: { icon: "/fuelbooks-mark.svg" },
 };
 
 export default function RootLayout({ children }) {
