@@ -102,25 +102,9 @@ const PAY_FREQUENCIES = [
   { value: "monthly", label: "Monthly (12/yr)", periods: 12 },
 ];
 
-const initEmployees = [
-  { id: "EMP-001", name: "Marcus Johnson", role: "Operations Manager", department: "Operations", payType: "salary", payRate: 85000, filingStatus: "single", state: "TX", startDate: "2024-03-15", active: true, ytdGross: 13461.54, ytdFedTax: 1354.65, ytdSS: 834.62, ytdMedicare: 195.19 },
-  { id: "EMP-002", name: "Lisa Tran", role: "Fuel Trader", department: "Sales", payType: "salary", payRate: 92000, filingStatus: "married", state: "TX", startDate: "2024-06-01", active: true, ytdGross: 14569.23, ytdFedTax: 1263.80, ytdSS: 903.29, ytdMedicare: 211.25 },
-  { id: "EMP-003", name: "Derek Williams", role: "Dispatch Coordinator", department: "Logistics", payType: "hourly", payRate: 28.50, filingStatus: "single", state: "TX", startDate: "2025-01-10", active: true, ytdGross: 8892.00, ytdFedTax: 711.70, ytdSS: 551.30, ytdMedicare: 128.93 },
-  { id: "EMP-004", name: "Amanda Foster", role: "Accounts Receivable", department: "Finance", payType: "salary", payRate: 62000, filingStatus: "single", state: "TX", startDate: "2025-04-20", active: true, ytdGross: 9538.46, ytdFedTax: 834.51, ytdSS: 591.38, ytdMedicare: 138.31 },
-  { id: "EMP-005", name: "Carlos Mendez", role: "CDL Driver / Carrier Liaison", department: "Logistics", payType: "hourly", payRate: 32.00, filingStatus: "married", state: "TX", startDate: "2024-08-12", active: true, ytdGross: 10240.00, ytdFedTax: 614.40, ytdSS: 634.88, ytdMedicare: 148.48 },
-  { id: "EMP-006", name: "Jennifer Park", role: "Admin Assistant", department: "Admin", payType: "hourly", payRate: 22.00, filingStatus: "single", state: "TX", startDate: "2025-09-01", active: true, ytdGross: 6864.00, ytdFedTax: 549.12, ytdSS: 425.57, ytdMedicare: 99.53 },
-];
-
-const initPayHistory = [
-  {
-    id: "PR-001", periodStart: "2026-01-27", periodEnd: "2026-02-09", payDate: "2026-02-14", frequency: "biweekly", status: "completed",
-    entries: initEmployees.filter(e => e.active).map(emp => {
-      const gross = emp.payType === "salary" ? emp.payRate / 26 : emp.payRate * 80;
-      const taxes = calcPayrollTaxes(gross, emp.payType === "salary" ? emp.payRate : emp.payRate * 2080, emp.ytdGross - gross, emp.state, emp.filingStatus);
-      return { employeeId: emp.id, employeeName: emp.name, hoursWorked: emp.payType === "hourly" ? 80 : null, ...taxes };
-    }),
-  },
-];
+// No employees or pay runs are seeded. This module is not mounted.
+const initEmployees = [];
+const initPayHistory = [];
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN PAYROLL COMPONENT
@@ -316,9 +300,9 @@ function EmployeeRoster({ employees, onEdit }) {
 // ─── RUN PAYROLL ────────────────────────────────────────────────────────────
 function RunPayroll({ employees, onRun }) {
   const [frequency, setFrequency] = useState("biweekly");
-  const [periodStart, setPeriodStart] = useState("2026-02-10");
-  const [periodEnd, setPeriodEnd] = useState("2026-02-23");
-  const [payDate, setPayDate] = useState("2026-02-28");
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
+  const [payDate, setPayDate] = useState("");
   const [hours, setHours] = useState({});
   const [preview, setPreview] = useState(null);
 
